@@ -44,6 +44,81 @@ GatewayOps MCP Gateway is a proxy layer that sits between AI agents and MCP (Mod
 - Slack Integration
 - RBAC
 
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Go 1.21+ (optional, for local development)
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/akz4ol/gatewayops.git
+cd gatewayops
+
+# Run the setup script
+./scripts/dev-setup.sh
+
+# Or manually:
+cp .env.example .env
+docker-compose -f deployments/docker-compose.yml up -d
+
+# Run the gateway
+make run
+```
+
+### Generate an API Key
+
+```bash
+go run scripts/generate-key.go dev
+```
+
+### Test the Gateway
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# List MCP tools (requires API key)
+curl -X POST http://localhost:8080/v1/mcp/mock/tools/list \
+  -H "Authorization: Bearer gwo_dev_YOUR_API_KEY" \
+  -H "Content-Type: application/json"
+
+# Call an MCP tool
+curl -X POST http://localhost:8080/v1/mcp/mock/tools/call \
+  -H "Authorization: Bearer gwo_dev_YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "read_file", "arguments": {"path": "/test.txt"}}'
+```
+
+## Project Structure
+
+```
+gatewayops/
+├── gateway/
+│   ├── cmd/gateway/main.go       # Entry point
+│   └── internal/
+│       ├── config/               # Configuration loading
+│       ├── server/               # HTTP server
+│       ├── router/               # Route definitions
+│       ├── middleware/           # Auth, rate limit, logging, trace
+│       ├── handler/              # Request handlers
+│       ├── auth/                 # API key authentication
+│       ├── ratelimit/            # Redis rate limiting
+│       └── database/             # Database connections
+├── migrations/
+│   ├── postgres/                 # PostgreSQL schemas
+│   └── clickhouse/               # ClickHouse schemas
+├── deployments/
+│   ├── docker-compose.yml        # Local development
+│   └── docker/                   # Dockerfiles
+├── scripts/                      # Development scripts
+└── test/
+    └── mock-mcp/                 # Mock MCP server
+```
+
 ## Technology Stack
 
 - **Gateway**: Go 1.21+

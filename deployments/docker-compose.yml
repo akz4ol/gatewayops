@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: ../
+      dockerfile: deployments/docker/Dockerfile.gateway
+    container_name: gatewayops-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=development
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/gatewayops?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - CLICKHOUSE_DSN=clickhouse://clickhouse:9000/default
+      - MCP_SERVER_MOCK_URL=http://mock-mcp:3000
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      mock-mcp:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: gatewayops-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: gatewayops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../migrations/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gatewayops-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23-alpine
+    container_name: gatewayops-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ../migrations/clickhouse:/docker-entrypoint-initdb.d
+    environment:
+      CLICKHOUSE_DB: gatewayops
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mock-mcp:
+    build:
+      context: ../
+      dockerfile: deployments/docker/Dockerfile.mock-mcp
+    container_name: gatewayops-mock-mcp
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
+
+networks:
+  default:
+    name: gatewayops-network
