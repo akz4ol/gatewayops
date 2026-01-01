@@ -1,48 +1,17 @@
 # GatewayOps
 
-**Enterprise Control Plane for AI Agent Infrastructure**
+**Enterprise MCP Gateway - Authentication, Rate Limiting, Tracing & Cost Tracking**
 
-GatewayOps is the missing observability, governance, and cost management layer that enterprises need to deploy AI agents at scale with confidence.
+GatewayOps is a proxy layer that sits between AI agents and MCP (Model Context Protocol) servers, providing enterprise-grade observability, security, and cost management.
 
-## Overview
+## Features
 
-GatewayOps MCP Gateway is a proxy layer that sits between AI agents and MCP (Model Context Protocol) servers, providing:
-
-- **Authentication & Authorization**: SSO integration, API key management, RBAC
-- **Cost Attribution**: Per-call tracking, team/project allocation, budget enforcement
-- **Observability**: Distributed tracing, request logging, latency metrics
-- **Security**: Request validation, rate limiting, audit trails, data masking
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [PRD.md](./PRD.md) | Product Requirements Document - features, user stories, specifications |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | Technical Architecture - system design, infrastructure, security |
-| [API.md](./API.md) | API Documentation - endpoints, SDKs, examples |
-
-## Target Market
-
-- **Primary**: Engineering teams at companies with 50-500 employees running AI/ML workloads
-- **Secondary**: Platform teams at enterprises (500+) standardizing AI agent infrastructure
-
-## Key Features
-
-### P0 (MVP)
-- MCP Gateway Proxy
-- Cost Tracking Engine
-- Distributed Tracing
-- Authentication & API Keys
-- Request Logging & Audit Trail
-- Rate Limiting
-
-### P1 (Post-MVP)
-- Budget Enforcement
-- Real-Time Dashboard
-- Anomaly Detection
-- OpenTelemetry Export
-- Slack Integration
-- RBAC
+- **Authentication**: API key validation with bcrypt, per-key permissions
+- **Rate Limiting**: Redis sliding window algorithm, per-key limits
+- **Distributed Tracing**: Trace ID propagation, span tracking
+- **Cost Tracking**: Per-call pricing, usage attribution
+- **Request Logging**: Structured JSON logs, data masking
+- **MCP Proxy**: Tools, resources, and prompts forwarding
 
 ## Quick Start
 
@@ -93,6 +62,20 @@ curl -X POST http://localhost:8080/v1/mcp/mock/tools/call \
   -d '{"tool": "read_file", "arguments": {"path": "/test.txt"}}'
 ```
 
+## API Endpoints
+
+### Health
+- `GET /health` - Liveness check
+- `GET /ready` - Readiness check
+
+### MCP Proxy
+- `POST /v1/mcp/{server}/tools/call` - Call an MCP tool
+- `POST /v1/mcp/{server}/tools/list` - List available tools
+- `POST /v1/mcp/{server}/resources/read` - Read a resource
+- `POST /v1/mcp/{server}/resources/list` - List resources
+- `POST /v1/mcp/{server}/prompts/get` - Get a prompt
+- `POST /v1/mcp/{server}/prompts/list` - List prompts
+
 ## Project Structure
 
 ```
@@ -121,26 +104,35 @@ gatewayops/
 
 ## Technology Stack
 
-- **Gateway**: Go 1.21+
-- **Dashboard**: Next.js 14, shadcn/ui
+- **Language**: Go 1.21+
+- **Router**: chi
 - **Databases**: PostgreSQL, ClickHouse, Redis
-- **Infrastructure**: AWS (EKS, RDS, ElastiCache)
-- **CI/CD**: GitHub Actions, ArgoCD
+- **Containerization**: Docker
 
-## Timeline
+## Configuration
 
-| Phase | Timeline | Goal |
-|-------|----------|------|
-| Foundation | Months 1-3 | MVP with 5 design partners |
-| Validation | Months 4-6 | GA launch, $100K ARR |
-| Scale | Months 7-12 | $500K ARR, SOC2 certified |
+Environment variables (see `.env.example`):
 
-## Links
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | HTTP server port |
+| `ENV` | `development` | Environment (development/production) |
+| `DATABASE_URL` | - | PostgreSQL connection string |
+| `REDIS_URL` | - | Redis connection string |
+| `CLICKHOUSE_DSN` | - | ClickHouse connection string |
+| `RATE_LIMIT_DEFAULT_RPM` | `1000` | Default requests per minute |
 
-- **Company**: [ai-saas-company](https://github.com/akz4ol/ai-saas-company) - Organization skill system
-- **Website**: gatewayops.com (coming soon)
-- **Documentation**: docs.gatewayops.com (coming soon)
+## Related Repositories
+
+| Repository | Purpose |
+|------------|---------|
+| [gatewayops-product](https://github.com/akz4ol/gatewayops-product) | Product operations - PRD, architecture, API specs |
+| [ai-saas-company](https://github.com/akz4ol/ai-saas-company) | Company framework |
+
+## License
+
+Proprietary - All rights reserved
 
 ---
 
-Built with the [AI SaaS Company](https://github.com/akz4ol/ai-saas-company) organizational framework.
+Part of the [AI SaaS Company](https://github.com/akz4ol/ai-saas-company) organizational framework.
