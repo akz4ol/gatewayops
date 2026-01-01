@@ -1,0 +1,1169 @@
+openapi: 3.1.0
+info:
+  title: GatewayOps API
+  version: 1.0.0
+  description: |
+    GatewayOps is an enterprise MCP (Model Context Protocol) Gateway that provides
+    secure, observable, and scalable access to MCP servers.
+
+    ## Authentication
+
+    All API requests require authentication using a Bearer token:
+
+    ```
+    Authorization: Bearer gwo_prd_...
+    ```
+
+    API keys can be created in the dashboard or via the API.
+
+    ## Rate Limiting
+
+    API requests are rate limited based on your API key configuration.
+    Rate limit headers are included in all responses:
+
+    - `X-RateLimit-Limit`: Maximum requests per minute
+    - `X-RateLimit-Remaining`: Remaining requests in the current window
+    - `X-RateLimit-Reset`: Unix timestamp when the window resets
+
+  contact:
+    name: GatewayOps Support
+    email: support@gatewayops.com
+    url: https://gatewayops.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.gatewayops.com
+    description: Production
+  - url: https://sandbox.gatewayops.com
+    description: Sandbox
+
+tags:
+  - name: MCP
+    description: MCP (Model Context Protocol) operations
+  - name: Traces
+    description: Distributed tracing and observability
+  - name: Costs
+    description: Usage and cost analytics
+  - name: API Keys
+    description: API key management
+  - name: Audit
+    description: Audit logging
+  - name: SSO
+    description: Single Sign-On configuration
+  - name: RBAC
+    description: Role-based access control
+  - name: Safety
+    description: Safety policies and injection detection
+  - name: Alerts
+    description: Alerting and notifications
+
+security:
+  - BearerAuth: []
+
+paths:
+  # MCP Operations
+  /v1/mcp/{server}/tools/list:
+    post:
+      tags: [MCP]
+      summary: List tools
+      description: List all tools available on the specified MCP server.
+      operationId: listTools
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ToolDefinition'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/mcp/{server}/tools/call:
+    post:
+      tags: [MCP]
+      summary: Call a tool
+      description: Execute a tool on the specified MCP server.
+      operationId: callTool
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tool]
+              properties:
+                tool:
+                  type: string
+                  description: Name of the tool to call
+                arguments:
+                  type: object
+                  description: Tool arguments
+      responses:
+        '200':
+          description: Tool call result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCallResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/mcp/{server}/resources/list:
+    post:
+      tags: [MCP]
+      summary: List resources
+      description: List all resources available on the specified MCP server.
+      operationId: listResources
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      responses:
+        '200':
+          description: List of resources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Resource'
+
+  /v1/mcp/{server}/resources/read:
+    post:
+      tags: [MCP]
+      summary: Read a resource
+      description: Read a resource from the specified MCP server.
+      operationId: readResource
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri]
+              properties:
+                uri:
+                  type: string
+                  description: Resource URI
+      responses:
+        '200':
+          description: Resource content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceContent'
+
+  /v1/mcp/{server}/prompts/list:
+    post:
+      tags: [MCP]
+      summary: List prompts
+      description: List all prompts available on the specified MCP server.
+      operationId: listPrompts
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      responses:
+        '200':
+          description: List of prompts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prompts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Prompt'
+
+  /v1/mcp/{server}/prompts/get:
+    post:
+      tags: [MCP]
+      summary: Get a prompt
+      description: Get a prompt with rendered messages from the specified MCP server.
+      operationId: getPrompt
+      parameters:
+        - $ref: '#/components/parameters/ServerPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Prompt name
+                arguments:
+                  type: object
+                  description: Prompt arguments
+      responses:
+        '200':
+          description: Prompt messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PromptMessage'
+
+  # Traces
+  /v1/traces:
+    get:
+      tags: [Traces]
+      summary: List traces
+      description: List traces with optional filters.
+      operationId: listTraces
+      parameters:
+        - name: mcp_server
+          in: query
+          schema:
+            type: string
+        - name: operation
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [success, error, timeout]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Paginated list of traces
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TracePage'
+
+  /v1/traces/{traceId}:
+    get:
+      tags: [Traces]
+      summary: Get trace
+      description: Get a specific trace by ID.
+      operationId: getTrace
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Trace details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trace'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Costs
+  /v1/costs/summary:
+    get:
+      tags: [Costs]
+      summary: Get cost summary
+      description: Get cost summary for the specified period.
+      operationId: getCostSummary
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: month
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [server, team, tool]
+      responses:
+        '200':
+          description: Cost summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostSummary'
+
+  # API Keys
+  /v1/api-keys:
+    get:
+      tags: [API Keys]
+      summary: List API keys
+      description: List all API keys for the organization.
+      operationId: listAPIKeys
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/APIKey'
+
+    post:
+      tags: [API Keys]
+      summary: Create API key
+      description: Create a new API key.
+      operationId: createAPIKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                environment:
+                  type: string
+                  enum: [production, sandbox]
+                  default: production
+                permissions:
+                  type: string
+                  default: full
+                rateLimitRpm:
+                  type: integer
+      responses:
+        '201':
+          description: Created API key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    $ref: '#/components/schemas/APIKey'
+                  token:
+                    type: string
+                    description: The full API key token (only shown once)
+
+  /v1/api-keys/{keyId}:
+    delete:
+      tags: [API Keys]
+      summary: Delete API key
+      description: Delete an API key.
+      operationId: deleteAPIKey
+      parameters:
+        - name: keyId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Key deleted
+
+  # Audit Logs
+  /v1/audit-logs:
+    get:
+      tags: [Audit]
+      summary: List audit logs
+      description: List audit logs with optional filters.
+      operationId: listAuditLogs
+      parameters:
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Paginated list of audit logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+                  total:
+                    type: integer
+                  hasMore:
+                    type: boolean
+
+  # SSO
+  /v1/sso/providers:
+    get:
+      tags: [SSO]
+      summary: List SSO providers
+      description: List configured SSO providers.
+      operationId: listSSOProviders
+      responses:
+        '200':
+          description: List of SSO providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SSOProvider'
+
+    post:
+      tags: [SSO]
+      summary: Create SSO provider
+      description: Configure a new SSO provider.
+      operationId: createSSOProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SSOProviderInput'
+      responses:
+        '201':
+          description: Created SSO provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSOProvider'
+
+  # RBAC
+  /v1/roles:
+    get:
+      tags: [RBAC]
+      summary: List roles
+      description: List all roles.
+      operationId: listRoles
+      responses:
+        '200':
+          description: List of roles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Role'
+
+    post:
+      tags: [RBAC]
+      summary: Create role
+      description: Create a new custom role.
+      operationId: createRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleInput'
+      responses:
+        '201':
+          description: Created role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+
+  # Safety
+  /v1/safety-policies:
+    get:
+      tags: [Safety]
+      summary: List safety policies
+      description: List safety policies for prompt injection detection.
+      operationId: listSafetyPolicies
+      responses:
+        '200':
+          description: List of safety policies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  policies:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SafetyPolicy'
+
+    post:
+      tags: [Safety]
+      summary: Create safety policy
+      description: Create a new safety policy.
+      operationId: createSafetyPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SafetyPolicyInput'
+      responses:
+        '201':
+          description: Created safety policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyPolicy'
+
+  # Approvals
+  /v1/approvals:
+    get:
+      tags: [Safety]
+      summary: List tool approvals
+      description: List tool approval requests.
+      operationId: listApprovals
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, denied]
+      responses:
+        '200':
+          description: List of approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approvals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ToolApproval'
+
+  /v1/approvals/{approvalId}/approve:
+    post:
+      tags: [Safety]
+      summary: Approve tool access
+      description: Approve a tool access request.
+      operationId: approveToolAccess
+      parameters:
+        - name: approvalId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approval updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolApproval'
+
+  # Alerts
+  /v1/alerts/rules:
+    get:
+      tags: [Alerts]
+      summary: List alert rules
+      description: List configured alert rules.
+      operationId: listAlertRules
+      responses:
+        '200':
+          description: List of alert rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlertRule'
+
+    post:
+      tags: [Alerts]
+      summary: Create alert rule
+      description: Create a new alert rule.
+      operationId: createAlertRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleInput'
+      responses:
+        '201':
+          description: Created alert rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+
+  /v1/alerts:
+    get:
+      tags: [Alerts]
+      summary: List active alerts
+      description: List active alerts.
+      operationId: listAlerts
+      responses:
+        '200':
+          description: List of active alerts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Alert'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+
+  parameters:
+    ServerPath:
+      name: server
+      in: path
+      required: true
+      schema:
+        type: string
+      description: MCP server name
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+
+    ToolDefinition:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        inputSchema:
+          type: object
+
+    ToolCallResult:
+      type: object
+      properties:
+        content:
+          description: Tool output
+        isError:
+          type: boolean
+        metadata:
+          type: object
+        traceId:
+          type: string
+        spanId:
+          type: string
+        durationMs:
+          type: integer
+        cost:
+          type: number
+
+    Resource:
+      type: object
+      properties:
+        uri:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        mimeType:
+          type: string
+
+    ResourceContent:
+      type: object
+      properties:
+        uri:
+          type: string
+        mimeType:
+          type: string
+        text:
+          type: string
+        blob:
+          type: string
+          description: Base64 encoded binary content
+
+    Prompt:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        arguments:
+          type: array
+          items:
+            type: object
+
+    PromptMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          description: Message content
+
+    Trace:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        apiKeyId:
+          type: string
+        mcpServer:
+          type: string
+        operation:
+          type: string
+        status:
+          type: string
+          enum: [success, error, timeout]
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+        spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/Span'
+        errorMessage:
+          type: string
+        cost:
+          type: number
+
+    Span:
+      type: object
+      properties:
+        id:
+          type: string
+        traceId:
+          type: string
+        parentSpanId:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+        attributes:
+          type: object
+
+    TracePage:
+      type: object
+      properties:
+        traces:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trace'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        hasMore:
+          type: boolean
+
+    CostSummary:
+      type: object
+      properties:
+        totalCost:
+          type: number
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        requestCount:
+          type: integer
+        byServer:
+          type: array
+          items:
+            $ref: '#/components/schemas/CostBreakdown'
+        byTeam:
+          type: array
+          items:
+            $ref: '#/components/schemas/CostBreakdown'
+        byTool:
+          type: array
+          items:
+            $ref: '#/components/schemas/CostBreakdown'
+
+    CostBreakdown:
+      type: object
+      properties:
+        dimension:
+          type: string
+        value:
+          type: string
+        cost:
+          type: number
+        requestCount:
+          type: integer
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        keyPrefix:
+          type: string
+        environment:
+          type: string
+          enum: [production, sandbox]
+        permissions:
+          type: string
+        rateLimitRpm:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        userId:
+          type: string
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+        outcome:
+          type: string
+          enum: [success, failure, denied]
+        metadata:
+          type: object
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    SSOProvider:
+      type: object
+      properties:
+        id:
+          type: string
+        providerType:
+          type: string
+          enum: [okta, azure_ad, google]
+        name:
+          type: string
+        issuerUrl:
+          type: string
+        clientId:
+          type: string
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    SSOProviderInput:
+      type: object
+      required: [providerType, name, issuerUrl, clientId, clientSecret]
+      properties:
+        providerType:
+          type: string
+          enum: [okta, azure_ad, google]
+        name:
+          type: string
+        issuerUrl:
+          type: string
+        clientId:
+          type: string
+        clientSecret:
+          type: string
+        claimMappings:
+          type: object
+
+    Role:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        isBuiltin:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    RoleInput:
+      type: object
+      required: [name, permissions]
+      properties:
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+
+    SafetyPolicy:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        sensitivity:
+          type: string
+          enum: [low, moderate, high, critical]
+        mode:
+          type: string
+          enum: [log, warn, block]
+        patterns:
+          type: array
+          items:
+            type: object
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    SafetyPolicyInput:
+      type: object
+      required: [name, patterns]
+      properties:
+        name:
+          type: string
+        sensitivity:
+          type: string
+          enum: [low, moderate, high, critical]
+        mode:
+          type: string
+          enum: [log, warn, block]
+        patterns:
+          type: array
+          items:
+            type: object
+            properties:
+              pattern:
+                type: string
+              name:
+                type: string
+              severity:
+                type: string
+
+    ToolApproval:
+      type: object
+      properties:
+        id:
+          type: string
+        mcpServer:
+          type: string
+        toolName:
+          type: string
+        teamId:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, denied]
+        requestedBy:
+          type: string
+        reviewedBy:
+          type: string
+        reviewedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    AlertRule:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        metric:
+          type: string
+        condition:
+          type: string
+          enum: [gt, lt, gte, lte]
+        threshold:
+          type: number
+        windowMinutes:
+          type: integer
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        channels:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+
+    AlertRuleInput:
+      type: object
+      required: [name, metric, condition, threshold, channels]
+      properties:
+        name:
+          type: string
+        metric:
+          type: string
+        condition:
+          type: string
+          enum: [gt, lt, gte, lte]
+        threshold:
+          type: number
+        windowMinutes:
+          type: integer
+          default: 5
+        severity:
+          type: string
+          enum: [info, warning, critical]
+          default: warning
+        channels:
+          type: array
+          items:
+            type: string
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+        ruleId:
+          type: string
+        status:
+          type: string
+          enum: [firing, resolved]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        message:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
