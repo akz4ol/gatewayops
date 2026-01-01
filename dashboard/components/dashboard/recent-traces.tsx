@@ -1,57 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { CheckCircle, XCircle, Clock } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// Sample data - in production this would come from the API
-const traces = [
-  {
-    id: 'tr_1a2b3c4d',
-    server: 'filesystem',
-    operation: 'tools/call',
-    tool: 'read_file',
-    status: 'success',
-    duration: 45,
-    time: '2 min ago',
-  },
-  {
-    id: 'tr_2b3c4d5e',
-    server: 'database',
-    operation: 'tools/call',
-    tool: 'query',
-    status: 'success',
-    duration: 128,
-    time: '5 min ago',
-  },
-  {
-    id: 'tr_3c4d5e6f',
-    server: 'github',
-    operation: 'tools/call',
-    tool: 'create_issue',
-    status: 'error',
-    duration: 2340,
-    time: '8 min ago',
-  },
-  {
-    id: 'tr_4d5e6f7g',
-    server: 'slack',
-    operation: 'tools/call',
-    tool: 'send_message',
-    status: 'success',
-    duration: 89,
-    time: '12 min ago',
-  },
-  {
-    id: 'tr_5e6f7g8h',
-    server: 'filesystem',
-    operation: 'resources/read',
-    tool: 'file://config.json',
-    status: 'success',
-    duration: 23,
-    time: '15 min ago',
-  },
-];
+import { useRecentTraces } from '@/lib/hooks/use-api';
 
 const statusConfig = {
   success: {
@@ -71,7 +23,43 @@ const statusConfig = {
   },
 };
 
+function formatTime(isoTime: string): string {
+  const date = new Date(isoTime);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} min ago`;
+
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
 export function RecentTraces() {
+  const { data, isLoading, error } = useRecentTraces();
+
+  if (isLoading) {
+    return (
+      <div className="h-[200px] flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error || !data?.traces) {
+    return (
+      <div className="h-[200px] flex items-center justify-center text-gray-500">
+        Failed to load traces
+      </div>
+    );
+  }
+
+  const traces = data.traces;
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -87,7 +75,7 @@ export function RecentTraces() {
         </thead>
         <tbody className="divide-y divide-gray-100">
           {traces.map((trace) => {
-            const config = statusConfig[trace.status as keyof typeof statusConfig];
+            const config = statusConfig[trace.status as keyof typeof statusConfig] || statusConfig.success;
             const Icon = config.icon;
             return (
               <tr key={trace.id} className="hover:bg-gray-50">
@@ -111,7 +99,7 @@ export function RecentTraces() {
                 </td>
                 <td className="py-3 text-sm text-gray-900">{trace.tool}</td>
                 <td className="py-3 text-sm text-gray-500">{trace.duration}ms</td>
-                <td className="py-3 text-sm text-gray-500">{trace.time}</td>
+                <td className="py-3 text-sm text-gray-500">{formatTime(trace.time)}</td>
               </tr>
             );
           })}

@@ -1,15 +1,24 @@
 module github.com/akz4ol/gatewayops
 
-go 1.21
+go 1.23
 
 require (
 	github.com/go-chi/chi/v5 v5.0.11
+	github.com/go-chi/cors v1.2.1
 	github.com/redis/go-redis/v9 v9.3.1
 	github.com/google/uuid v1.5.0
 	github.com/jackc/pgx/v5 v5.5.1
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.31.0
 	golang.org/x/crypto v0.17.0
+	github.com/coreos/go-oidc/v3 v3.11.0
+	golang.org/x/oauth2 v0.21.0
+	go.opentelemetry.io/otel v1.28.0
+	go.opentelemetry.io/otel/sdk v1.28.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.28.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.28.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.28.0
+	google.golang.org/grpc v1.65.0
 )
 
 require (

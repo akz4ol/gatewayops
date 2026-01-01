@@ -5,15 +5,18 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/akz4ol/gatewayops/gateway/internal/handler"
+	"github.com/akz4ol/gatewayops/gateway/internal/response"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
 // AuthInfo contains authenticated API key information.
 type AuthInfo struct {
 	KeyID       string
-	OrgID       string
-	TeamID      string
+	APIKeyID    uuid.UUID
+	UserID      uuid.UUID
+	OrgID       uuid.UUID
+	TeamID      uuid.UUID
 	Environment string
 	Permissions []string
 	RateLimit   int
@@ -34,14 +37,14 @@ func Auth(store AuthStore, logger zerolog.Logger) func(http.Handler) http.Handle
 			// Extract API key from Authorization header
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				handler.WriteError(w, http.StatusUnauthorized, "missing_auth", "Authorization header is required")
+				response.WriteError(w, http.StatusUnauthorized, "missing_auth", "Authorization header is required")
 				return
 			}
 
 			// Expect "Bearer <api_key>" format
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				handler.WriteError(w, http.StatusUnauthorized, "invalid_auth", "Authorization header must be in format: Bearer <api_key>")
+				response.WriteError(w, http.StatusUnauthorized, "invalid_auth", "Authorization header must be in format: Bearer <api_key>")
 				return
 			}
 
@@ -49,7 +52,7 @@ func Auth(store AuthStore, logger zerolog.Logger) func(http.Handler) http.Handle
 
 			// Validate API key format: gwo_{env}_{32chars}
 			if !isValidAPIKeyFormat(apiKey) {
-				handler.WriteError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API key format")
+				response.WriteError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API key format")
 				return
 			}
 
@@ -60,7 +63,7 @@ func Auth(store AuthStore, logger zerolog.Logger) func(http.Handler) http.Handle
 					Err(err).
 					Str("api_key_prefix", apiKey[:12]+"...").
 					Msg("API key validation failed")
-				handler.WriteError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid or expired API key")
+				response.WriteError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid or expired API key")
 				return
 			}
 
@@ -69,7 +72,7 @@ func Auth(store AuthStore, logger zerolog.Logger) func(http.Handler) http.Handle
 
 			logger.Debug().
 				Str("key_id", authInfo.KeyID).
-				Str("org_id", authInfo.OrgID).
+				Str("org_id", authInfo.OrgID.String()).
 				Str("env", authInfo.Environment).
 				Msg("Request authenticated")
 

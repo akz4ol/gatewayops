@@ -39,8 +39,15 @@ func WriteError(w http.ResponseWriter, status int, code string, message string) 
 	})
 }
 
-// WriteSuccess writes a success response.
-func WriteSuccess(w http.ResponseWriter, status int, data interface{}) {
+// WriteSuccess writes a success response with status code.
+func WriteSuccess(w http.ResponseWriter, data interface{}) {
+	WriteJSON(w, http.StatusOK, SuccessResponse{
+		Data: data,
+	})
+}
+
+// WriteSuccessStatus writes a success response with custom status code.
+func WriteSuccessStatus(w http.ResponseWriter, status int, data interface{}) {
 	WriteJSON(w, status, SuccessResponse{
 		Data: data,
 	})

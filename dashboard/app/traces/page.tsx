@@ -2,22 +2,10 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { CheckCircle, XCircle, Clock, Search, Filter } from 'lucide-react';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { CheckCircle, XCircle, Clock, Search, Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// Sample data
-const traces = Array.from({ length: 20 }, (_, i) => ({
-  id: `tr_${Math.random().toString(36).substring(2, 10)}`,
-  server: ['filesystem', 'database', 'github', 'slack', 'memory'][i % 5],
-  operation: ['tools/call', 'resources/read', 'prompts/get'][i % 3],
-  tool: ['read_file', 'query', 'create_issue', 'send_message', 'get_memory'][i % 5],
-  status: i === 3 || i === 12 ? 'error' : i === 7 ? 'timeout' : 'success',
-  duration: Math.floor(Math.random() * 500) + 20,
-  startTime: new Date(Date.now() - i * 300000).toISOString(),
-  cost: Math.random() * 0.01,
-}));
+import { useTraces } from '@/lib/hooks/use-api';
 
 const statusConfig = {
   success: { icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50', label: 'Success' },
@@ -27,12 +15,22 @@ const statusConfig = {
 
 export default function TracesPage() {
   const [filter, setFilter] = useState({ server: '', status: '' });
-
-  const filteredTraces = traces.filter((trace) => {
-    if (filter.server && trace.server !== filter.server) return false;
-    if (filter.status && trace.status !== filter.status) return false;
-    return true;
+  const { data, isLoading, error } = useTraces({
+    limit: 20,
+    server: filter.server || undefined,
+    status: filter.status || undefined,
   });
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-2" />
+          <p className="text-gray-600">Failed to load traces</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -78,58 +76,69 @@ export default function TracesPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Status</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Trace ID</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Server</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Operation</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Tool/Resource</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Duration</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Cost</th>
-                  <th className="pb-3 text-left text-sm font-medium text-gray-500">Time</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredTraces.map((trace) => {
-                  const config = statusConfig[trace.status as keyof typeof statusConfig];
-                  const Icon = config.icon;
-                  return (
-                    <tr key={trace.id} className="hover:bg-gray-50">
-                      <td className="py-3">
-                        <div className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-1', config.bg)}>
-                          <Icon className={cn('h-3.5 w-3.5', config.color)} />
-                          <span className={cn('text-xs font-medium', config.color)}>{config.label}</span>
-                        </div>
-                      </td>
-                      <td className="py-3">
-                        <Link
-                          href={`/traces/${trace.id}`}
-                          className="font-mono text-sm text-indigo-600 hover:underline"
-                        >
-                          {trace.id}
-                        </Link>
-                      </td>
-                      <td className="py-3">
-                        <span className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">
-                          {trace.server}
-                        </span>
-                      </td>
-                      <td className="py-3 text-sm text-gray-500">{trace.operation}</td>
-                      <td className="py-3 text-sm text-gray-900">{trace.tool}</td>
-                      <td className="py-3 text-sm text-gray-500">{trace.duration}ms</td>
-                      <td className="py-3 text-sm text-gray-500">${trace.cost.toFixed(4)}</td>
-                      <td className="py-3 text-sm text-gray-500">
-                        {new Date(trace.startTime).toLocaleTimeString()}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Status</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Trace ID</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Server</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Operation</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Tool/Resource</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Duration</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Cost</th>
+                    <th className="pb-3 text-left text-sm font-medium text-gray-500">Time</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {data?.traces?.map((trace) => {
+                    const config = statusConfig[trace.status as keyof typeof statusConfig] || statusConfig.success;
+                    const Icon = config.icon;
+                    return (
+                      <tr key={trace.id} className="hover:bg-gray-50">
+                        <td className="py-3">
+                          <div className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-1', config.bg)}>
+                            <Icon className={cn('h-3.5 w-3.5', config.color)} />
+                            <span className={cn('text-xs font-medium', config.color)}>{config.label}</span>
+                          </div>
+                        </td>
+                        <td className="py-3">
+                          <Link
+                            href={`/traces/${trace.trace_id}`}
+                            className="font-mono text-sm text-indigo-600 hover:underline"
+                          >
+                            {trace.trace_id}
+                          </Link>
+                        </td>
+                        <td className="py-3">
+                          <span className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">
+                            {trace.mcp_server}
+                          </span>
+                        </td>
+                        <td className="py-3 text-sm text-gray-500">{trace.operation}</td>
+                        <td className="py-3 text-sm text-gray-900">{trace.tool_name}</td>
+                        <td className="py-3 text-sm text-gray-500">{trace.duration_ms}ms</td>
+                        <td className="py-3 text-sm text-gray-500">${trace.cost.toFixed(4)}</td>
+                        <td className="py-3 text-sm text-gray-500">
+                          {new Date(trace.created_at).toLocaleTimeString()}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {data && (
+                <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
+                  <span>Showing {data.traces?.length || 0} of {data.total} traces</span>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -5,9 +5,31 @@ import { StatsCard } from '@/components/dashboard/stats-card';
 import { RequestsChart } from '@/components/dashboard/requests-chart';
 import { RecentTraces } from '@/components/dashboard/recent-traces';
 import { TopServers } from '@/components/dashboard/top-servers';
-import { Activity, DollarSign, Clock, AlertTriangle } from 'lucide-react';
+import { Activity, DollarSign, Clock, AlertTriangle, Loader2 } from 'lucide-react';
+import { useOverview } from '@/lib/hooks/use-api';
 
 export default function DashboardPage() {
+  const { data: overview, isLoading, error } = useOverview();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-2" />
+          <p className="text-gray-600">Failed to load dashboard data</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -18,31 +40,31 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatsCard
           title="Total Requests"
-          value="1.2M"
-          change={12.5}
+          value={overview?.total_requests.formatted || '0'}
+          change={overview?.total_requests.change || 0}
           icon={Activity}
-          description="Last 30 days"
+          description={`Last ${overview?.total_requests.period || '30d'}`}
         />
         <StatsCard
           title="Total Cost"
-          value="$4,231.89"
-          change={-3.2}
+          value={overview?.total_cost.formatted || '$0'}
+          change={overview?.total_cost.change || 0}
           icon={DollarSign}
-          description="Last 30 days"
+          description={`Last ${overview?.total_cost.period || '30d'}`}
         />
         <StatsCard
           title="Avg Latency"
-          value="127ms"
-          change={-8.1}
+          value={overview?.avg_latency.formatted || '0ms'}
+          change={overview?.avg_latency.change || 0}
           icon={Clock}
-          description="P95 latency"
+          description={overview?.avg_latency.percentile || 'P95 latency'}
         />
         <StatsCard
           title="Error Rate"
-          value="0.12%"
-          change={0.02}
+          value={overview?.error_rate.formatted || '0%'}
+          change={overview?.error_rate.change || 0}
           icon={AlertTriangle}
-          description="Last 24 hours"
+          description={`Last ${overview?.error_rate.period || '24h'}`}
           changeType="negative"
         />
       </div>

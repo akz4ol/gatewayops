@@ -3,45 +3,92 @@
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, Copy, Trash2, Key, MoreVertical } from 'lucide-react';
+import { Plus, Copy, Trash2, Key, MoreVertical, Loader2, AlertTriangle, RotateCw, CheckCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// Sample data
-const apiKeys = [
-  {
-    id: 'key_1',
-    name: 'Production API',
-    prefix: 'gwo_prd_abc1',
-    environment: 'production',
-    permissions: 'full',
-    rateLimitRpm: 1000,
-    createdAt: '2024-01-10T10:00:00Z',
-    lastUsedAt: '2024-01-15T14:30:00Z',
-  },
-  {
-    id: 'key_2',
-    name: 'Development',
-    prefix: 'gwo_dev_xyz2',
-    environment: 'sandbox',
-    permissions: 'full',
-    rateLimitRpm: 100,
-    createdAt: '2024-01-08T10:00:00Z',
-    lastUsedAt: '2024-01-15T12:00:00Z',
-  },
-  {
-    id: 'key_3',
-    name: 'CI/CD Pipeline',
-    prefix: 'gwo_prd_def3',
-    environment: 'production',
-    permissions: 'read',
-    rateLimitRpm: 500,
-    createdAt: '2024-01-05T10:00:00Z',
-    lastUsedAt: '2024-01-14T08:00:00Z',
-  },
-];
+import { useApiKeys, useCreateApiKey, useDeleteApiKey, useRotateApiKey } from '@/lib/hooks/use-api';
+import { mutate } from 'swr';
 
 export default function APIKeysPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyEnv, setNewKeyEnv] = useState('development');
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const { data, isLoading, error } = useApiKeys();
+  const createMutation = useCreateApiKey();
+  const deleteMutation = useDeleteApiKey();
+  const rotateMutation = useRotateApiKey();
+
+  const handleCreate = async () => {
+    if (!newKeyName.trim()) return;
+
+    try {
+      const result = await createMutation.trigger({
+        name: newKeyName,
+        environment: newKeyEnv,
+      });
+      setCreatedKey(result.raw_key);
+      setNewKeyName('');
+      mutate('api-keys');
+    } catch (err) {
+      console.error('Failed to create key:', err);
+    }
+  };
+
+  const handleDelete = async (keyId: string) => {
+    if (!confirm('Are you sure you want to revoke this API key? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await deleteMutation.trigger(keyId);
+      mutate('api-keys');
+    } catch (err) {
+      console.error('Failed to delete key:', err);
+    }
+  };
+
+  const handleRotate = async (keyId: string) => {
+    if (!confirm('This will revoke the current key and generate a new one. Continue?')) {
+      return;
+    }
+
+    try {
+      const result = await rotateMutation.trigger(keyId);
+      setCreatedKey(result.raw_key);
+      mutate('api-keys');
+    } catch (err) {
+      console.error('Failed to rotate key:', err);
+    }
+  };
+
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-2" />
+          <p className="text-gray-600">Failed to load API keys</p>
+        </div>
+      </div>
+    );
+  }
+
+  const apiKeys = data?.api_keys || [];
 
   return (
     <div className="space-y-6">
@@ -55,6 +102,83 @@ export default function APIKeysPage() {
           Create API Key
         </Button>
       </div>
+
+      {/* Create Modal */}
+      {showCreateModal && (
+        <Card className="border-indigo-200 bg-indigo-50/50">
+          <CardHeader>
+            <CardTitle className="text-lg font-medium">Create New API Key</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+              <input
+                type="text"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                placeholder="e.g., Production API"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Environment</label>
+              <select
+                value={newKeyEnv}
+                onChange={(e) => setNewKeyEnv(e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="development">Development</option>
+                <option value="staging">Staging</option>
+                <option value="production">Production</option>
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleCreate} disabled={createMutation.isMutating}>
+                {createMutation.isMutating ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4 mr-2" />
+                )}
+                Create Key
+              </Button>
+              <Button variant="outline" onClick={() => {
+                setShowCreateModal(false);
+                setCreatedKey(null);
+              }}>
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Show created key */}
+      {createdKey && (
+        <Card className="border-green-200 bg-green-50">
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-green-800 mb-1">API Key Created Successfully!</p>
+                <p className="text-xs text-green-600 mb-2">Copy this key now - you won't be able to see it again.</p>
+                <code className="text-sm text-green-800 font-mono bg-green-100 px-2 py-1 rounded">{createdKey}</code>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleCopy(createdKey, 'new')}
+                className="border-green-300 text-green-700 hover:bg-green-100"
+              >
+                {copiedId === 'new' ? (
+                  <CheckCircle className="h-4 w-4 mr-1" />
+                ) : (
+                  <Copy className="h-4 w-4 mr-1" />
+                )}
+                {copiedId === 'new' ? 'Copied!' : 'Copy'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -73,20 +197,32 @@ export default function APIKeysPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {apiKeys.map((key) => (
-                  <tr key={key.id} className="hover:bg-gray-50">
+                  <tr key={key.id} className={cn("hover:bg-gray-50", key.revoked && "opacity-50")}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <div className="rounded-full bg-gray-100 p-2">
                           <Key className="h-4 w-4 text-gray-600" />
                         </div>
-                        <span className="font-medium text-gray-900">{key.name}</span>
+                        <div>
+                          <span className="font-medium text-gray-900">{key.name}</span>
+                          {key.revoked && (
+                            <span className="ml-2 text-xs text-red-600">(Revoked)</span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <code className="text-sm text-gray-600 font-mono">{key.prefix}...</code>
-                        <button className="text-gray-400 hover:text-gray-600">
-                          <Copy className="h-4 w-4" />
+                        <code className="text-sm text-gray-600 font-mono">{key.key_prefix}...</code>
+                        <button
+                          className="text-gray-400 hover:text-gray-600"
+                          onClick={() => handleCopy(key.key_prefix + '...', key.id)}
+                        >
+                          {copiedId === key.id ? (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
                         </button>
                       </div>
                     </td>
@@ -96,29 +232,50 @@ export default function APIKeysPage() {
                           'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
                           key.environment === 'production'
                             ? 'bg-green-100 text-green-800'
-                            : 'bg-yellow-100 text-yellow-800'
+                            : key.environment === 'staging'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-blue-100 text-blue-800'
                         )}
                       >
                         {key.environment}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{key.permissions}</td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{key.rateLimitRpm} rpm</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {key.permissions?.join(', ') || 'full'}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{key.rate_limit} rpm</td>
                     <td className="px-6 py-4 text-sm text-gray-500">
-                      {new Date(key.lastUsedAt).toLocaleDateString()}
+                      {key.last_used_at ? new Date(key.last_used_at).toLocaleDateString() : 'Never'}
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <button className="text-gray-400 hover:text-red-600">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                        <button className="text-gray-400 hover:text-gray-600">
-                          <MoreVertical className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {!key.revoked && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="text-gray-400 hover:text-indigo-600"
+                            onClick={() => handleRotate(key.id)}
+                            title="Rotate key"
+                          >
+                            <RotateCw className="h-4 w-4" />
+                          </button>
+                          <button
+                            className="text-gray-400 hover:text-red-600"
+                            onClick={() => handleDelete(key.id)}
+                            title="Revoke key"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
+                {apiKeys.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                      No API keys found. Create your first key to get started.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

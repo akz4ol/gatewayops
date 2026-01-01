@@ -2,18 +2,29 @@
 package main
 
 import (
+	_ "embed"
 	"os"
 	"time"
 
+	"github.com/akz4ol/gatewayops/gateway/internal/alerting"
+	"github.com/akz4ol/gatewayops/gateway/internal/approval"
+	"github.com/akz4ol/gatewayops/gateway/internal/audit"
+	"github.com/akz4ol/gatewayops/gateway/internal/otel"
+	"github.com/akz4ol/gatewayops/gateway/internal/rbac"
+	"github.com/akz4ol/gatewayops/gateway/internal/sso"
 	"github.com/akz4ol/gatewayops/gateway/internal/auth"
 	"github.com/akz4ol/gatewayops/gateway/internal/config"
 	"github.com/akz4ol/gatewayops/gateway/internal/database"
 	"github.com/akz4ol/gatewayops/gateway/internal/handler"
 	"github.com/akz4ol/gatewayops/gateway/internal/ratelimit"
 	"github.com/akz4ol/gatewayops/gateway/internal/router"
+	"github.com/akz4ol/gatewayops/gateway/internal/safety"
 	"github.com/akz4ol/gatewayops/gateway/internal/server"
 	"github.com/rs/zerolog"
 )
+
+//go:embed openapi.yaml
+var openAPISpec []byte
 
 func main() {
 	// Load configuration
@@ -50,18 +61,65 @@ func main() {
 	// Initialize rate limiter
 	rateLimiter := ratelimit.NewLimiter(redis.Client, logger)
 
+	// Initialize injection detector
+	injectionDetector := safety.NewDetector(logger)
+
+	// Initialize audit logger
+	auditLogger := audit.NewLogger(logger)
+
+	// Initialize alerting service
+	alertService := alerting.NewService(logger)
+
+	// Initialize OpenTelemetry exporter
+	otelExporter := otel.NewExporter(logger)
+
+	// Initialize tool approval service
+	approvalService := approval.NewService(logger)
+
+	// Initialize RBAC service
+	rbacService := rbac.NewService(logger)
+
+	// Initialize SSO service
+	ssoService := sso.NewService(logger)
+
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler(postgres, redis, rateLimiter)
 	mcpHandler := handler.NewMCPHandler(cfg, logger)
+	traceHandler := handler.NewTraceHandler(logger)
+	costHandler := handler.NewCostHandler(logger)
+	apiKeyHandler := handler.NewAPIKeyHandler(logger)
+	metricsHandler := handler.NewMetricsHandler(logger)
+	docsHandler := handler.NewDocsHandler(logger, openAPISpec)
+	safetyHandler := handler.NewSafetyHandler(logger, injectionDetector)
+	auditHandler := handler.NewAuditHandler(logger, auditLogger)
+	alertHandler := handler.NewAlertHandler(logger, alertService)
+	telemetryHandler := handler.NewTelemetryHandler(logger, otelExporter)
+	approvalHandler := handler.NewApprovalHandler(logger, approvalService)
+	rbacHandler := handler.NewRBACHandler(logger, rbacService)
+	ssoHandler := handler.NewSSOHandler(logger, ssoService, "https://gatewayops-api.fly.dev")
 
 	// Create router with dependencies
 	deps := router.Dependencies{
-		Config:        cfg,
-		Logger:        logger,
-		AuthStore:     authStore,
-		RateLimiter:   rateLimiter,
-		MCPHandler:    mcpHandler,
-		HealthHandler: healthHandler,
+		Config:            cfg,
+		Logger:            logger,
+		AuthStore:         authStore,
+		RateLimiter:       rateLimiter,
+		InjectionDetector: injectionDetector,
+		AuditLogger:       auditLogger,
+		MCPHandler:        mcpHandler,
+		HealthHandler:     healthHandler,
+		TraceHandler:      traceHandler,
+		CostHandler:       costHandler,
+		APIKeyHandler:     apiKeyHandler,
+		MetricsHandler:    metricsHandler,
+		DocsHandler:       docsHandler,
+		SafetyHandler:     safetyHandler,
+		AuditHandler:      auditHandler,
+		AlertHandler:      alertHandler,
+		TelemetryHandler:  telemetryHandler,
+		ApprovalHandler:   approvalHandler,
+		RBACHandler:       rbacHandler,
+		SSOHandler:        ssoHandler,
 	}
 
 	r := router.New(deps)

@@ -111,7 +111,7 @@ func (h *MCPHandler) proxyRequest(w http.ResponseWriter, r *http.Request, endpoi
 		Str("span_id", spanID).
 		Str("server", serverName).
 		Str("endpoint", endpoint).
-		Str("org_id", authInfo.OrgID).
+		Str("org_id", authInfo.OrgID.String()).
 		Int("body_size", len(body)).
 		Msg("Proxying MCP request")
 

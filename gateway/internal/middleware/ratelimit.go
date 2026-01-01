@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/akz4ol/gatewayops/gateway/internal/handler"
+	"github.com/akz4ol/gatewayops/gateway/internal/response"
 	"github.com/rs/zerolog"
 )
 
@@ -59,7 +59,7 @@ func RateLimit(limiter RateLimiter, logger zerolog.Logger) func(http.Handler) ht
 					Msg("Rate limit exceeded")
 
 				w.Header().Set("Retry-After", strconv.Itoa(resetSeconds))
-				handler.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded",
+				response.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded",
 					fmt.Sprintf("Rate limit exceeded. Try again in %d seconds", resetSeconds))
 				return
 			}

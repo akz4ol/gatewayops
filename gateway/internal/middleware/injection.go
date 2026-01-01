@@ -4,210 +4,28 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
-	"github.com/akz4ol/gatewayops/gateway/internal/handler"
-	"github.com/akz4ol/gatewayops/gateway/internal/service"
+	"github.com/akz4ol/gatewayops/gateway/internal/safety"
+	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 )
 
-// InjectionMiddleware provides prompt injection detection.
-type InjectionMiddleware struct {
-	injectionService *service.InjectionService
-	logger           *slog.Logger
+// InjectionDetector defines the interface for injection detection.
+type InjectionDetector interface {
+	Detect(input string, opts safety.DetectOptions) domain.DetectionResult
 }
 
-// NewInjectionMiddleware creates a new injection detection middleware.
-func NewInjectionMiddleware(injectionService *service.InjectionService, logger *slog.Logger) *InjectionMiddleware {
-	return &InjectionMiddleware{
-		injectionService: injectionService,
-		logger:           logger,
-	}
-}
-
-// Detect checks requests for prompt injection patterns.
-func (m *InjectionMiddleware) Detect() func(http.Handler) http.Handler {
+// Injection returns middleware that detects prompt injection attempts.
+func Injection(detector InjectionDetector, logger zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Only check MCP tool call requests
-			if !strings.Contains(r.URL.Path, "/tools/call") {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Get organization ID from auth context
-			authInfo := GetAuthInfo(r.Context())
-			if authInfo == nil {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Read and buffer the request body
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				m.logger.Error("failed to read request body", "error", err)
-				next.ServeHTTP(w, r)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			// Extract MCP server from URL
-			mcpServer := chi.URLParam(r, "server")
-			if mcpServer == "" {
-				mcpServer = "unknown"
-			}
-
-			// Extract input to scan
-			input := m.extractInput(body)
-			if input == "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Perform detection
-			result, err := m.injectionService.Detect(r.Context(), authInfo.OrgID, mcpServer, input)
-			if err != nil {
-				m.logger.Error("injection detection failed",
-					"error", err,
-					"mcp_server", mcpServer,
-				)
-				// Continue on error - don't block requests if detection fails
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			if result.Detected {
-				// Record the detection
-				detection := &domain.InjectionDetection{
-					OrgID:          authInfo.OrgID,
-					TraceID:        GetTraceID(r.Context()),
-					Type:           result.Type,
-					Severity:       result.Severity,
-					PatternMatched: result.PatternMatched,
-					Input:          input,
-					ActionTaken:    result.Action,
-					MCPServer:      mcpServer,
-					ToolName:       m.extractToolName(body),
-					APIKeyID:       authInfo.APIKeyID,
-					IPAddress:      GetClientIP(r),
-					CreatedAt:      time.Now(),
-				}
-
-				go func() {
-					if err := m.injectionService.RecordDetection(r.Context(), detection); err != nil {
-						m.logger.Error("failed to record detection", "error", err)
-					}
-				}()
-
-				// Handle based on action
-				switch result.Action {
-				case domain.SafetyModeBlock:
-					m.logger.Warn("injection blocked",
-						"type", result.Type,
-						"severity", result.Severity,
-						"pattern", result.PatternMatched,
-						"mcp_server", mcpServer,
-					)
-					handler.WriteError(w, http.StatusBadRequest, "injection_detected",
-						"Request blocked: potential prompt injection detected")
-					return
-
-				case domain.SafetyModeWarn:
-					m.logger.Warn("injection detected (warn mode)",
-						"type", result.Type,
-						"severity", result.Severity,
-						"pattern", result.PatternMatched,
-						"mcp_server", mcpServer,
-					)
-					// Add warning header and continue
-					w.Header().Set("X-GatewayOps-Warning", "Potential prompt injection detected")
-
-				case domain.SafetyModeLog:
-					m.logger.Info("injection detected (log mode)",
-						"type", result.Type,
-						"severity", result.Severity,
-						"pattern", result.PatternMatched,
-						"mcp_server", mcpServer,
-					)
-				}
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// extractInput extracts the text input from a tool call request body.
-func (m *InjectionMiddleware) extractInput(body []byte) string {
-	var request struct {
-		Tool      string                 `json:"tool"`
-		Arguments map[string]interface{} `json:"arguments"`
-	}
-
-	if err := json.Unmarshal(body, &request); err != nil {
-		return ""
-	}
-
-	// Collect all string values from arguments
-	var inputs []string
-	m.collectStrings(request.Arguments, &inputs)
-
-	return strings.Join(inputs, " ")
-}
-
-// collectStrings recursively collects all string values from a map.
-func (m *InjectionMiddleware) collectStrings(data map[string]interface{}, result *[]string) {
-	for _, v := range data {
-		switch val := v.(type) {
-		case string:
-			if len(val) > 0 {
-				*result = append(*result, val)
-			}
-		case map[string]interface{}:
-			m.collectStrings(val, result)
-		case []interface{}:
-			for _, item := range val {
-				if s, ok := item.(string); ok && len(s) > 0 {
-					*result = append(*result, s)
-				}
-				if m2, ok := item.(map[string]interface{}); ok {
-					m.collectStrings(m2, result)
-				}
-			}
-		}
-	}
-}
-
-// extractToolName extracts the tool name from a tool call request body.
-func (m *InjectionMiddleware) extractToolName(body []byte) string {
-	var request struct {
-		Tool string `json:"tool"`
-	}
-
-	if err := json.Unmarshal(body, &request); err != nil {
-		return ""
-	}
-
-	return request.Tool
-}
-
-// DetectWithApproval combines injection detection with tool approval checking.
-func (m *InjectionMiddleware) DetectWithApproval(approvalService *service.ApprovalService) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Only check MCP tool call requests
-			if !strings.Contains(r.URL.Path, "/tools/call") {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			authInfo := GetAuthInfo(r.Context())
-			if authInfo == nil {
+			// Only check POST requests to tools/call endpoint
+			if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/tools/call") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -218,44 +36,93 @@ func (m *InjectionMiddleware) DetectWithApproval(approvalService *service.Approv
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Restore body for downstream handlers
 			r.Body = io.NopCloser(bytes.NewBuffer(body))
 
+			// Parse request to extract input
+			var toolCall struct {
+				Name      string                 `json:"name"`
+				Arguments map[string]interface{} `json:"arguments"`
+			}
+			if err := json.Unmarshal(body, &toolCall); err != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Extract text content from arguments
+			inputText := extractTextContent(toolCall.Arguments)
+			if inputText == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Get context info
 			mcpServer := chi.URLParam(r, "server")
-			toolName := m.extractToolName(body)
+			reqID := chimiddleware.GetReqID(r.Context())
 
-			if mcpServer == "" || toolName == "" {
-				next.ServeHTTP(w, r)
-				return
+			// Get auth info if available
+			var apiKeyID *uuid.UUID
+			var orgID uuid.UUID
+			if authInfo := GetAuthInfo(r.Context()); authInfo != nil {
+				apiKeyID = &authInfo.APIKeyID
+				orgID = authInfo.OrgID
+			} else {
+				orgID = uuid.MustParse("00000000-0000-0000-0000-000000000001") // Demo org
 			}
 
-			// Check tool approval
-			userID := GetUserID(r.Context())
-			if userID == nil {
-				// If no user ID, use a placeholder for API key-based calls
-				placeholder := uuid.Nil
-				userID = &placeholder
+			// Detect injection
+			opts := safety.DetectOptions{
+				Input:     inputText,
+				OrgID:     orgID,
+				TraceID:   reqID,
+				MCPServer: mcpServer,
+				ToolName:  toolCall.Name,
+				APIKeyID:  apiKeyID,
+				IPAddress: r.RemoteAddr,
 			}
 
-			accessResult, err := approvalService.CheckToolAccess(r.Context(), authInfo.OrgID, *userID, mcpServer, toolName)
-			if err != nil {
-				m.logger.Error("failed to check tool access", "error", err)
-				next.ServeHTTP(w, r)
-				return
-			}
+			result := detector.Detect(inputText, opts)
 
-			if !accessResult.Allowed {
-				handler.WriteError(w, http.StatusForbidden, "tool_access_denied", accessResult.Message)
-				return
-			}
+			// Handle detection result
+			if result.Detected {
+				switch result.Action {
+				case domain.SafetyModeBlock:
+					logger.Warn().
+						Str("severity", string(result.Severity)).
+						Str("pattern", result.PatternMatched).
+						Str("mcp_server", mcpServer).
+						Str("tool", toolCall.Name).
+						Msg("Blocked request due to prompt injection detection")
 
-			// Then check for injection
-			input := m.extractInput(body)
-			if input != "" {
-				result, err := m.injectionService.Detect(r.Context(), authInfo.OrgID, mcpServer, input)
-				if err == nil && result.Detected && result.Action == domain.SafetyModeBlock {
-					handler.WriteError(w, http.StatusBadRequest, "injection_detected",
-						"Request blocked: potential prompt injection detected")
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"error": map[string]interface{}{
+							"code":    "injection_detected",
+							"message": "Request blocked: potential prompt injection detected",
+							"details": map[string]interface{}{
+								"severity": result.Severity,
+								"type":     result.Type,
+							},
+						},
+					})
 					return
+
+				case domain.SafetyModeWarn:
+					// Add warning header and continue
+					w.Header().Set("X-Safety-Warning", "potential_injection_detected")
+					w.Header().Set("X-Safety-Severity", string(result.Severity))
+					logger.Warn().
+						Str("severity", string(result.Severity)).
+						Str("pattern", result.PatternMatched).
+						Msg("Warning: potential prompt injection detected (allowed)")
+
+				case domain.SafetyModeLog:
+					// Just log, no action
+					logger.Debug().
+						Str("severity", string(result.Severity)).
+						Str("pattern", result.PatternMatched).
+						Msg("Logged potential prompt injection")
 				}
 			}
 
@@ -264,24 +131,50 @@ func (m *InjectionMiddleware) DetectWithApproval(approvalService *service.Approv
 	}
 }
 
-// GetClientIP extracts the client IP from a request.
-func GetClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		// Take the first IP in the list
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+// extractTextContent extracts text content from tool arguments for analysis.
+func extractTextContent(args map[string]interface{}) string {
+	var texts []string
+
+	for key, value := range args {
+		switch v := value.(type) {
+		case string:
+			// Include string values that might contain user input
+			if isUserInputField(key) {
+				texts = append(texts, v)
+			}
+		case map[string]interface{}:
+			// Recursively extract from nested objects
+			texts = append(texts, extractTextContent(v))
+		case []interface{}:
+			// Extract from arrays
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					texts = append(texts, str)
+				} else if obj, ok := item.(map[string]interface{}); ok {
+					texts = append(texts, extractTextContent(obj))
+				}
+			}
 		}
 	}
 
-	// Check X-Real-IP header
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		return xri
+	return strings.Join(texts, " ")
+}
+
+// isUserInputField checks if a field name suggests it contains user input.
+func isUserInputField(fieldName string) bool {
+	// Common field names that typically contain user-provided content
+	userInputFields := []string{
+		"content", "text", "message", "prompt", "query", "input",
+		"body", "data", "value", "description", "command", "code",
+		"path", "file", "url", "name", "title", "question", "answer",
 	}
 
-	// Fall back to RemoteAddr
-	return strings.Split(r.RemoteAddr, ":")[0]
+	lowerField := strings.ToLower(fieldName)
+	for _, field := range userInputFields {
+		if strings.Contains(lowerField, field) {
+			return true
+		}
+	}
+
+	return true // Be conservative - check all string fields
 }

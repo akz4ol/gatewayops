@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/akz4ol/gatewayops/gateway/internal/handler"
+	"github.com/akz4ol/gatewayops/gateway/internal/response"
 	"github.com/rs/zerolog"
 )
 
@@ -23,7 +23,7 @@ func Recoverer(logger zerolog.Logger) func(http.Handler) http.Handler {
 						Str("path", r.URL.Path).
 						Msg("Panic recovered")
 
-					handler.WriteError(w, http.StatusInternalServerError, "internal_error", "An internal error occurred")
+					response.WriteError(w, http.StatusInternalServerError, "internal_error", "An internal error occurred")
 				}
 			}()
 

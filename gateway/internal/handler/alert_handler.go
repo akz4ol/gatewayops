@@ -4,106 +4,96 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/akz4ol/gatewayops/gateway/internal/alerting"
+	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/akz4ol/gatewayops/gateway/internal/domain"
-	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
-	"github.com/akz4ol/gatewayops/gateway/internal/service"
+	"github.com/rs/zerolog"
 )
 
-// AlertHandler handles alert endpoints.
+// AlertHandler handles alert-related HTTP requests.
 type AlertHandler struct {
-	alertService *service.AlertService
+	logger  zerolog.Logger
+	service *alerting.Service
 }
 
 // NewAlertHandler creates a new alert handler.
-func NewAlertHandler(alertService *service.AlertService) *AlertHandler {
+func NewAlertHandler(logger zerolog.Logger, service *alerting.Service) *AlertHandler {
 	return &AlertHandler{
-		alertService: alertService,
+		logger:  logger,
+		service: service,
 	}
 }
 
-// ListRules lists all alert rules.
+// ListRules returns all alert rules.
 func (h *AlertHandler) ListRules(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	enabledOnly := r.URL.Query().Get("enabled_only") == "true"
-
-	rules, err := h.alertService.ListRules(r.Context(), authInfo.OrgID, enabledOnly)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list rules")
-		return
-	}
-
-	WriteSuccess(w, map[string]interface{}{
+	rules := h.service.ListRules()
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"rules": rules,
+		"total": len(rules),
 	})
 }
 
-// GetRule retrieves an alert rule by ID.
+// GetRule returns a single rule by ID.
 func (h *AlertHandler) GetRule(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "ruleID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid rule ID")
 		return
 	}
 
-	rule, err := h.alertService.GetRule(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rule")
-		return
-	}
-
+	rule := h.service.GetRule(id)
 	if rule == nil {
 		WriteError(w, http.StatusNotFound, "not_found", "Rule not found")
 		return
 	}
 
-	WriteSuccess(w, rule)
+	WriteJSON(w, http.StatusOK, rule)
 }
 
 // CreateRule creates a new alert rule.
 func (h *AlertHandler) CreateRule(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
-		return
-	}
-
 	var input domain.AlertRuleInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	if input.Name == "" || input.Metric == "" {
-		WriteError(w, http.StatusBadRequest, "missing_fields", "Name and metric are required")
+	if input.Name == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Name is required")
 		return
 	}
-
-	rule, err := h.alertService.CreateRule(r.Context(), authInfo.OrgID, *userID, input)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create rule")
+	if input.Metric == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Metric is required")
 		return
 	}
+	if input.Condition == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Condition is required")
+		return
+	}
+	if input.WindowMinutes <= 0 {
+		input.WindowMinutes = 5 // default
+	}
+	if input.Severity == "" {
+		input.Severity = domain.AlertSeverityWarning
+	}
 
+	// Demo org and user
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	rule := h.service.CreateRule(input, orgID, userID)
 	WriteJSON(w, http.StatusCreated, rule)
 }
 
-// UpdateRule updates an alert rule.
+// UpdateRule updates an existing rule.
 func (h *AlertHandler) UpdateRule(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "ruleID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid rule ID")
 		return
@@ -111,111 +101,95 @@ func (h *AlertHandler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 
 	var input domain.AlertRuleInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	rule, err := h.alertService.UpdateRule(r.Context(), id, input)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Rule not found")
-			return
-		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update rule")
+	rule := h.service.UpdateRule(id, input)
+	if rule == nil {
+		WriteError(w, http.StatusNotFound, "not_found", "Rule not found")
 		return
 	}
 
-	WriteSuccess(w, rule)
+	WriteJSON(w, http.StatusOK, rule)
 }
 
-// DeleteRule deletes an alert rule.
+// DeleteRule deletes a rule.
 func (h *AlertHandler) DeleteRule(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "ruleID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid rule ID")
 		return
 	}
 
-	if err := h.alertService.DeleteRule(r.Context(), id); err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete rule")
+	if !h.service.DeleteRule(id) {
+		WriteError(w, http.StatusNotFound, "not_found", "Rule not found")
 		return
 	}
 
-	WriteSuccess(w, map[string]string{"status": "deleted"})
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ListChannels lists all alert channels.
+// ListChannels returns all alert channels.
 func (h *AlertHandler) ListChannels(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	channels, err := h.alertService.ListChannels(r.Context(), authInfo.OrgID)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list channels")
-		return
-	}
-
-	WriteSuccess(w, map[string]interface{}{
+	channels := h.service.ListChannels()
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"channels": channels,
+		"total":    len(channels),
 	})
 }
 
-// GetChannel retrieves an alert channel by ID.
+// GetChannel returns a single channel by ID.
 func (h *AlertHandler) GetChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "channelID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid channel ID")
 		return
 	}
 
-	channel, err := h.alertService.GetChannel(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel")
-		return
-	}
-
+	channel := h.service.GetChannel(id)
 	if channel == nil {
 		WriteError(w, http.StatusNotFound, "not_found", "Channel not found")
 		return
 	}
 
-	WriteSuccess(w, channel)
+	WriteJSON(w, http.StatusOK, channel)
 }
 
 // CreateChannel creates a new alert channel.
 func (h *AlertHandler) CreateChannel(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
 	var input domain.AlertChannelInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	if input.Name == "" || input.Type == "" {
-		WriteError(w, http.StatusBadRequest, "missing_fields", "Name and type are required")
+	if input.Name == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Name is required")
+		return
+	}
+	if input.Type == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Type is required")
+		return
+	}
+	if input.Config == nil {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Config is required")
 		return
 	}
 
-	channel, err := h.alertService.CreateChannel(r.Context(), authInfo.OrgID, input)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
-		return
-	}
+	// Demo org
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
+	channel := h.service.CreateChannel(input, orgID)
 	WriteJSON(w, http.StatusCreated, channel)
 }
 
-// UpdateChannel updates an alert channel.
+// UpdateChannel updates an existing channel.
 func (h *AlertHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "channelID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid channel ID")
 		return
@@ -223,195 +197,196 @@ func (h *AlertHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 
 	var input domain.AlertChannelInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	channel, err := h.alertService.UpdateChannel(r.Context(), id, input)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Channel not found")
-			return
-		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel")
+	channel := h.service.UpdateChannel(id, input)
+	if channel == nil {
+		WriteError(w, http.StatusNotFound, "not_found", "Channel not found")
 		return
 	}
 
-	WriteSuccess(w, channel)
+	WriteJSON(w, http.StatusOK, channel)
 }
 
-// DeleteChannel deletes an alert channel.
+// DeleteChannel deletes a channel.
 func (h *AlertHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "channelID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid channel ID")
 		return
 	}
 
-	if err := h.alertService.DeleteChannel(r.Context(), id); err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel")
+	if !h.service.DeleteChannel(id) {
+		WriteError(w, http.StatusNotFound, "not_found", "Channel not found")
 		return
 	}
 
-	WriteSuccess(w, map[string]string{"status": "deleted"})
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ListAlerts lists alerts with filtering.
-func (h *AlertHandler) ListAlerts(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	filter := domain.AlertFilter{
-		OrgID: authInfo.OrgID,
-	}
-
-	if ruleID := r.URL.Query().Get("rule_id"); ruleID != "" {
-		id, err := uuid.Parse(ruleID)
-		if err == nil {
-			filter.RuleID = &id
-		}
-	}
-
-	if statuses := r.URL.Query()["status"]; len(statuses) > 0 {
-		for _, s := range statuses {
-			filter.Statuses = append(filter.Statuses, domain.AlertStatus(s))
-		}
-	}
-
-	if severities := r.URL.Query()["severity"]; len(severities) > 0 {
-		for _, s := range severities {
-			filter.Severities = append(filter.Severities, domain.AlertSeverity(s))
-		}
-	}
-
-	if limit := r.URL.Query().Get("limit"); limit != "" {
-		l, err := strconv.Atoi(limit)
-		if err == nil {
-			filter.Limit = l
-		}
-	}
-
-	if offset := r.URL.Query().Get("offset"); offset != "" {
-		o, err := strconv.Atoi(offset)
-		if err == nil {
-			filter.Offset = o
-		}
-	}
-
-	page, err := h.alertService.ListAlerts(r.Context(), filter)
+// TestChannel sends a test notification to a channel.
+func (h *AlertHandler) TestChannel(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "channelID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list alerts")
+		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid channel ID")
 		return
 	}
 
-	WriteSuccess(w, page)
+	if err := h.service.TestChannel(id); err != nil {
+		WriteError(w, http.StatusBadRequest, "test_failed", err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "Test notification sent",
+	})
 }
 
-// GetAlert retrieves an alert by ID.
-func (h *AlertHandler) GetAlert(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+// ListAlerts returns alerts matching the filter.
+func (h *AlertHandler) ListAlerts(w http.ResponseWriter, r *http.Request) {
+	filter := h.parseAlertFilter(r)
+	page := h.service.GetAlerts(filter)
+	WriteJSON(w, http.StatusOK, page)
+}
+
+// GetActiveAlerts returns all currently firing alerts.
+func (h *AlertHandler) GetActiveAlerts(w http.ResponseWriter, r *http.Request) {
+	alerts := h.service.GetActiveAlerts()
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"alerts": alerts,
+		"total":  len(alerts),
+	})
+}
+
+// AcknowledgeAlert acknowledges an alert.
+func (h *AlertHandler) AcknowledgeAlert(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "alertID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid alert ID")
 		return
 	}
 
-	alert, err := h.alertService.GetAlert(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get alert")
-		return
-	}
+	// Demo user
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
+	alert := h.service.AcknowledgeAlert(id, userID)
 	if alert == nil {
 		WriteError(w, http.StatusNotFound, "not_found", "Alert not found")
 		return
 	}
 
-	WriteSuccess(w, alert)
+	WriteJSON(w, http.StatusOK, alert)
 }
 
 // ResolveAlert resolves an alert.
 func (h *AlertHandler) ResolveAlert(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "alertID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid alert ID")
 		return
 	}
 
-	alert, err := h.alertService.ResolveAlert(r.Context(), id)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Alert not found")
-			return
+	alert := h.service.ResolveAlert(id)
+	if alert == nil {
+		WriteError(w, http.StatusNotFound, "not_found", "Alert not found")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, alert)
+}
+
+// TriggerTestAlert triggers a test alert for demo purposes.
+func (h *AlertHandler) TriggerTestAlert(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Metric string  `json:"metric"`
+		Value  float64 `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
+		return
+	}
+
+	if input.Metric == "" {
+		input.Metric = "error_rate"
+	}
+	if input.Value == 0 {
+		input.Value = 10.0 // Default value above threshold
+	}
+
+	alert := h.service.TriggerTestAlert(input.Metric, input.Value)
+	if alert == nil {
+		WriteError(w, http.StatusInternalServerError, "trigger_failed", "Failed to trigger test alert")
+		return
+	}
+
+	WriteJSON(w, http.StatusCreated, alert)
+}
+
+// parseAlertFilter parses filter parameters from the request.
+func (h *AlertHandler) parseAlertFilter(r *http.Request) domain.AlertFilter {
+	query := r.URL.Query()
+
+	filter := domain.AlertFilter{
+		OrgID: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+	}
+
+	// Parse rule ID
+	if ruleIDStr := query.Get("rule_id"); ruleIDStr != "" {
+		if ruleID, err := uuid.Parse(ruleIDStr); err == nil {
+			filter.RuleID = &ruleID
 		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve alert")
-		return
 	}
 
-	WriteSuccess(w, alert)
-}
-
-// AcknowledgeAlert acknowledges an alert.
-func (h *AlertHandler) AcknowledgeAlert(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
-		return
-	}
-
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid alert ID")
-		return
-	}
-
-	alert, err := h.alertService.AcknowledgeAlert(r.Context(), id, *userID)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Alert not found")
-			return
+	// Parse statuses
+	if statusesStr := query.Get("statuses"); statusesStr != "" {
+		statuses := strings.Split(statusesStr, ",")
+		for _, s := range statuses {
+			filter.Statuses = append(filter.Statuses, domain.AlertStatus(strings.TrimSpace(s)))
 		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to acknowledge alert")
-		return
 	}
 
-	WriteSuccess(w, alert)
-}
-
-// ListFiring lists all firing alerts.
-func (h *AlertHandler) ListFiring(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
+	// Parse severities
+	if severitiesStr := query.Get("severities"); severitiesStr != "" {
+		severities := strings.Split(severitiesStr, ",")
+		for _, s := range severities {
+			filter.Severities = append(filter.Severities, domain.AlertSeverity(strings.TrimSpace(s)))
+		}
 	}
 
-	page, err := h.alertService.ListFiringAlerts(r.Context(), authInfo.OrgID)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list firing alerts")
-		return
+	// Parse time range
+	if startStr := query.Get("start_time"); startStr != "" {
+		if start, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartTime = &start
+		}
+	}
+	if endStr := query.Get("end_time"); endStr != "" {
+		if end, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndTime = &end
+		}
 	}
 
-	WriteSuccess(w, page)
-}
-
-// CountActive counts active (firing) alerts.
-func (h *AlertHandler) CountActive(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
+	// Parse pagination
+	if limitStr := query.Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			filter.Limit = limit
+		}
+	}
+	if filter.Limit == 0 {
+		filter.Limit = 50
 	}
 
-	count, err := h.alertService.CountActiveAlerts(r.Context(), authInfo.OrgID)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to count alerts")
-		return
+	if offsetStr := query.Get("offset"); offsetStr != "" {
+		if offset, err := strconv.Atoi(offsetStr); err == nil && offset >= 0 {
+			filter.Offset = offset
+		}
 	}
 
-	WriteSuccess(w, map[string]int64{
-		"count": count,
-	})
+	return filter
 }

@@ -1,17 +1,30 @@
 'use client';
 
-// Sample data - in production this would come from the API
-const servers = [
-  { name: 'filesystem', requests: 45000, cost: 1250.0 },
-  { name: 'database', requests: 32000, cost: 890.0 },
-  { name: 'github', requests: 28000, cost: 780.0 },
-  { name: 'slack', requests: 15000, cost: 420.0 },
-  { name: 'memory', requests: 12000, cost: 340.0 },
-];
-
-const maxRequests = Math.max(...servers.map((s) => s.requests));
+import { Loader2 } from 'lucide-react';
+import { useTopServers } from '@/lib/hooks/use-api';
 
 export function TopServers() {
+  const { data, isLoading, error } = useTopServers();
+
+  if (isLoading) {
+    return (
+      <div className="h-[200px] flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error || !data?.servers) {
+    return (
+      <div className="h-[200px] flex items-center justify-center text-gray-500">
+        Failed to load server data
+      </div>
+    );
+  }
+
+  const servers = data.servers;
+  const maxRequests = Math.max(...servers.map((s) => s.requests));
+
   return (
     <div className="space-y-4">
       {servers.map((server) => (

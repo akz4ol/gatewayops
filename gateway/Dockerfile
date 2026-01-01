@@ -1,17 +1,20 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
 # Install dependencies
 RUN apk add --no-cache git ca-certificates
 
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download
+# Copy go mod file and generate sum
+COPY go.mod ./
+RUN go mod download || true
 
 # Copy source code
 COPY . .
+
+# Ensure dependencies are resolved
+RUN go mod tidy
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gateway ./cmd/gateway
@@ -27,8 +30,7 @@ RUN apk --no-cache add ca-certificates tzdata
 # Copy binary from builder
 COPY --from=builder /app/gateway .
 
-# Copy migrations
-COPY --from=builder /app/../migrations /app/migrations
+# No migrations to copy for now - will be added when database is set up
 
 # Create non-root user
 RUN adduser -D -g '' appuser

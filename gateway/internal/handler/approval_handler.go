@@ -4,147 +4,179 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/akz4ol/gatewayops/gateway/internal/approval"
+	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/akz4ol/gatewayops/gateway/internal/domain"
-	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
-	"github.com/akz4ol/gatewayops/gateway/internal/service"
+	"github.com/rs/zerolog"
 )
 
-// ApprovalHandler handles tool approval endpoints.
+// ApprovalHandler handles tool approval HTTP requests.
 type ApprovalHandler struct {
-	approvalService *service.ApprovalService
+	logger  zerolog.Logger
+	service *approval.Service
 }
 
 // NewApprovalHandler creates a new approval handler.
-func NewApprovalHandler(approvalService *service.ApprovalService) *ApprovalHandler {
+func NewApprovalHandler(logger zerolog.Logger, service *approval.Service) *ApprovalHandler {
 	return &ApprovalHandler{
-		approvalService: approvalService,
+		logger:  logger,
+		service: service,
 	}
 }
 
-// List retrieves tool approvals with filtering.
-func (h *ApprovalHandler) List(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	filter := domain.ToolApprovalFilter{
-		OrgID: authInfo.OrgID,
-	}
-
-	if teamID := r.URL.Query().Get("team_id"); teamID != "" {
-		id, err := uuid.Parse(teamID)
-		if err == nil {
-			filter.TeamID = &id
-		}
-	}
-
-	if mcpServer := r.URL.Query().Get("mcp_server"); mcpServer != "" {
-		filter.MCPServer = mcpServer
-	}
-
-	if toolName := r.URL.Query().Get("tool_name"); toolName != "" {
-		filter.ToolName = toolName
-	}
-
-	if statuses := r.URL.Query()["status"]; len(statuses) > 0 {
-		for _, s := range statuses {
-			filter.Statuses = append(filter.Statuses, domain.ApprovalStatus(s))
-		}
-	}
-
-	if limit := r.URL.Query().Get("limit"); limit != "" {
-		l, err := strconv.Atoi(limit)
-		if err == nil {
-			filter.Limit = l
-		}
-	}
-
-	if offset := r.URL.Query().Get("offset"); offset != "" {
-		o, err := strconv.Atoi(offset)
-		if err == nil {
-			filter.Offset = o
-		}
-	}
-
-	page, err := h.approvalService.ListApprovals(r.Context(), filter)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list approvals")
-		return
-	}
-
-	WriteSuccess(w, page)
+// ListClassifications returns all tool classifications.
+func (h *ApprovalHandler) ListClassifications(w http.ResponseWriter, r *http.Request) {
+	server := r.URL.Query().Get("server")
+	classifications := h.service.ListClassifications(server)
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"classifications": classifications,
+		"total":           len(classifications),
+	})
 }
 
-// Get retrieves a tool approval by ID.
-func (h *ApprovalHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+// GetClassification returns a specific classification.
+func (h *ApprovalHandler) GetClassification(w http.ResponseWriter, r *http.Request) {
+	server := chi.URLParam(r, "server")
+	tool := chi.URLParam(r, "tool")
+
+	classification := h.service.GetClassification(server, tool)
+	if classification == nil {
+		// Return default classification
+		defaultLevel := domain.GetDefaultClassification(tool)
+		WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"server":           server,
+			"tool":             tool,
+			"classification":   defaultLevel,
+			"requires_approval": defaultLevel != domain.ToolRiskSafe,
+			"is_default":       true,
+		})
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, classification)
+}
+
+// SetClassification sets or updates a tool classification.
+func (h *ApprovalHandler) SetClassification(w http.ResponseWriter, r *http.Request) {
+	var input domain.ToolClassificationInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
+		return
+	}
+
+	if input.MCPServer == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "MCP server is required")
+		return
+	}
+	if input.ToolName == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Tool name is required")
+		return
+	}
+	if input.Classification == "" {
+		input.Classification = domain.ToolRiskSensitive
+	}
+
+	// Demo org and user
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	classification := h.service.SetClassification(input, orgID, userID)
+	WriteJSON(w, http.StatusOK, classification)
+}
+
+// DeleteClassification removes a tool classification.
+func (h *ApprovalHandler) DeleteClassification(w http.ResponseWriter, r *http.Request) {
+	server := chi.URLParam(r, "server")
+	tool := chi.URLParam(r, "tool")
+
+	if !h.service.DeleteClassification(server, tool) {
+		WriteError(w, http.StatusNotFound, "not_found", "Classification not found")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// CheckAccess checks if access is allowed to a tool.
+func (h *ApprovalHandler) CheckAccess(w http.ResponseWriter, r *http.Request) {
+	server := r.URL.Query().Get("server")
+	tool := r.URL.Query().Get("tool")
+
+	if server == "" || tool == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Server and tool are required")
+		return
+	}
+
+	// Demo user
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	allowed, reason := h.service.CheckAccess(userID, nil, server, tool)
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"allowed": allowed,
+		"reason":  reason,
+		"server":  server,
+		"tool":    tool,
+	})
+}
+
+// ListApprovals returns tool approval requests.
+func (h *ApprovalHandler) ListApprovals(w http.ResponseWriter, r *http.Request) {
+	filter := h.parseApprovalFilter(r)
+	page := h.service.ListApprovals(filter)
+	WriteJSON(w, http.StatusOK, page)
+}
+
+// GetApproval returns a specific approval request.
+func (h *ApprovalHandler) GetApproval(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "approvalID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid approval ID")
 		return
 	}
 
-	approval, err := h.approvalService.GetApproval(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get approval")
-		return
-	}
-
+	approval := h.service.GetApproval(id)
 	if approval == nil {
 		WriteError(w, http.StatusNotFound, "not_found", "Approval not found")
 		return
 	}
 
-	WriteSuccess(w, approval)
+	WriteJSON(w, http.StatusOK, approval)
 }
 
-// Request creates a new tool approval request.
-func (h *ApprovalHandler) Request(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+// RequestApproval creates a new approval request.
+func (h *ApprovalHandler) RequestApproval(w http.ResponseWriter, r *http.Request) {
+	var input domain.ToolApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
+	if input.MCPServer == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "MCP server is required")
+		return
+	}
+	if input.ToolName == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Tool name is required")
 		return
 	}
 
-	var request domain.ToolApprovalRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
-	}
+	// Demo org and user
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
-	if request.MCPServer == "" || request.ToolName == "" {
-		WriteError(w, http.StatusBadRequest, "missing_fields", "mcp_server and tool_name are required")
-		return
-	}
-
-	approval, err := h.approvalService.RequestApproval(r.Context(), authInfo.OrgID, *userID, request)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create approval request")
-		return
-	}
-
+	approval := h.service.RequestApproval(input, orgID, userID)
 	WriteJSON(w, http.StatusCreated, approval)
 }
 
-// Approve approves a tool approval request.
-func (h *ApprovalHandler) Approve(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
-		return
-	}
-
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+// ApproveRequest approves an approval request.
+func (h *ApprovalHandler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "approvalID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid approval ID")
 		return
@@ -152,35 +184,27 @@ func (h *ApprovalHandler) Approve(w http.ResponseWriter, r *http.Request) {
 
 	var review domain.ToolApprovalReview
 	if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
-		// Allow empty body for simple approvals
-		review = domain.ToolApprovalReview{
-			Status: domain.ApprovalStatusApproved,
-		}
+		// Allow empty body for simple approval
+		review = domain.ToolApprovalReview{}
 	}
 	review.Status = domain.ApprovalStatusApproved
 
-	approval, err := h.approvalService.Approve(r.Context(), id, *userID, review)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Approval not found")
-			return
-		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to approve request")
+	// Demo reviewer
+	reviewerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	approval := h.service.ReviewApproval(id, review, reviewerID)
+	if approval == nil {
+		WriteError(w, http.StatusNotFound, "not_found", "Approval not found")
 		return
 	}
 
-	WriteSuccess(w, approval)
+	WriteJSON(w, http.StatusOK, approval)
 }
 
-// Deny denies a tool approval request.
-func (h *ApprovalHandler) Deny(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
-		return
-	}
-
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+// DenyRequest denies an approval request.
+func (h *ApprovalHandler) DenyRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "approvalID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid approval ID")
 		return
@@ -192,151 +216,134 @@ func (h *ApprovalHandler) Deny(w http.ResponseWriter, r *http.Request) {
 	}
 	review.Status = domain.ApprovalStatusDenied
 
-	approval, err := h.approvalService.Deny(r.Context(), id, *userID, review)
-	if err != nil {
-		if _, ok := err.(service.ErrNotFound); ok {
-			WriteError(w, http.StatusNotFound, "not_found", "Approval not found")
-			return
-		}
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to deny request")
+	// Demo reviewer
+	reviewerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	approval := h.service.ReviewApproval(id, review, reviewerID)
+	if approval == nil {
+		WriteError(w, http.StatusNotFound, "not_found", "Approval not found")
 		return
 	}
 
-	WriteSuccess(w, approval)
+	WriteJSON(w, http.StatusOK, approval)
 }
 
-// ListPending lists pending approvals.
-func (h *ApprovalHandler) ListPending(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	limit := 50
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil {
-			limit = parsed
-		}
-	}
-
-	page, err := h.approvalService.ListPendingApprovals(r.Context(), authInfo.OrgID, limit)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list pending approvals")
-		return
-	}
-
-	WriteSuccess(w, page)
-}
-
-// ListClassifications lists tool classifications.
-func (h *ApprovalHandler) ListClassifications(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	mcpServer := r.URL.Query().Get("mcp_server")
-
-	classifications, err := h.approvalService.ListClassifications(r.Context(), authInfo.OrgID, mcpServer)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list classifications")
-		return
-	}
-
-	WriteSuccess(w, map[string]interface{}{
-		"classifications": classifications,
+// ListPermissions returns all tool permissions.
+func (h *ApprovalHandler) ListPermissions(w http.ResponseWriter, r *http.Request) {
+	server := r.URL.Query().Get("server")
+	permissions := h.service.ListPermissions(server)
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"permissions": permissions,
+		"total":       len(permissions),
 	})
 }
 
-// SetClassification sets or updates a tool classification.
-func (h *ApprovalHandler) SetClassification(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
+// GrantPermission grants a permission to use a tool.
+func (h *ApprovalHandler) GrantPermission(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		UserID     *uuid.UUID `json:"user_id,omitempty"`
+		TeamID     *uuid.UUID `json:"team_id,omitempty"`
+		MCPServer  string     `json:"mcp_server"`
+		ToolName   string     `json:"tool_name"`
+		ExpiresIn  *int       `json:"expires_in,omitempty"` // seconds
+		MaxUsesDay *int       `json:"max_uses_day,omitempty"`
 	}
-
-	userID := middleware.GetUserID(r.Context())
-	if userID == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "User authentication required")
-		return
-	}
-
-	var input domain.ToolClassificationInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid request body")
 		return
 	}
 
-	if input.MCPServer == "" || input.ToolName == "" {
-		WriteError(w, http.StatusBadRequest, "missing_fields", "mcp_server and tool_name are required")
+	if input.MCPServer == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "MCP server is required")
+		return
+	}
+	if input.ToolName == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Tool name is required")
+		return
+	}
+	if input.UserID == nil && input.TeamID == nil {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Either user_id or team_id is required")
 		return
 	}
 
-	classification, err := h.approvalService.SetClassification(r.Context(), authInfo.OrgID, *userID, input)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to set classification")
+	// Demo org and granter
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	granterID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	permission := h.service.GrantPermission(
+		orgID,
+		input.UserID,
+		input.TeamID,
+		input.MCPServer,
+		input.ToolName,
+		granterID,
+		input.ExpiresIn,
+		input.MaxUsesDay,
+	)
+
+	if permission == nil {
+		WriteError(w, http.StatusBadRequest, "grant_failed", "Failed to grant permission")
 		return
 	}
 
-	WriteSuccess(w, classification)
+	WriteJSON(w, http.StatusCreated, permission)
 }
 
-// GetClassification retrieves a tool classification.
-func (h *ApprovalHandler) GetClassification(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	mcpServer := chi.URLParam(r, "server")
-	toolName := chi.URLParam(r, "tool")
-
-	if mcpServer == "" || toolName == "" {
-		WriteError(w, http.StatusBadRequest, "missing_params", "server and tool are required")
-		return
-	}
-
-	classification, err := h.approvalService.GetClassification(r.Context(), authInfo.OrgID, mcpServer, toolName)
+// RevokePermission revokes a tool permission.
+func (h *ApprovalHandler) RevokePermission(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "permissionID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get classification")
+		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid permission ID")
 		return
 	}
 
-	if classification == nil {
-		// Return default classification
-		defaultLevel := domain.GetDefaultClassification(toolName)
-		WriteSuccess(w, map[string]interface{}{
-			"mcp_server":        mcpServer,
-			"tool_name":         toolName,
-			"classification":    defaultLevel,
-			"requires_approval": defaultLevel != domain.ToolRiskSafe,
-			"is_default":        true,
-		})
+	if !h.service.RevokePermission(id) {
+		WriteError(w, http.StatusNotFound, "not_found", "Permission not found")
 		return
 	}
 
-	WriteSuccess(w, classification)
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
-// DeleteClassification removes a tool classification.
-func (h *ApprovalHandler) DeleteClassification(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
+// GetPendingCount returns the count of pending approvals.
+func (h *ApprovalHandler) GetPendingCount(w http.ResponseWriter, r *http.Request) {
+	count := h.service.GetPendingCount()
+	WriteJSON(w, http.StatusOK, map[string]int{"pending_count": count})
+}
+
+func (h *ApprovalHandler) parseApprovalFilter(r *http.Request) domain.ToolApprovalFilter {
+	query := r.URL.Query()
+
+	filter := domain.ToolApprovalFilter{
+		OrgID: uuid.MustParse("00000000-0000-0000-0000-000000000001"),
 	}
 
-	mcpServer := chi.URLParam(r, "server")
-	toolName := chi.URLParam(r, "tool")
-
-	if err := h.approvalService.DeleteClassification(r.Context(), authInfo.OrgID, mcpServer, toolName); err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete classification")
-		return
+	if server := query.Get("server"); server != "" {
+		filter.MCPServer = server
+	}
+	if tool := query.Get("tool"); tool != "" {
+		filter.ToolName = tool
+	}
+	if statusesStr := query.Get("statuses"); statusesStr != "" {
+		statuses := strings.Split(statusesStr, ",")
+		for _, s := range statuses {
+			filter.Statuses = append(filter.Statuses, domain.ApprovalStatus(strings.TrimSpace(s)))
+		}
+	}
+	if limitStr := query.Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			filter.Limit = limit
+		}
+	}
+	if filter.Limit == 0 {
+		filter.Limit = 50
+	}
+	if offsetStr := query.Get("offset"); offsetStr != "" {
+		if offset, err := strconv.Atoi(offsetStr); err == nil && offset >= 0 {
+			filter.Offset = offset
+		}
 	}
 
-	WriteSuccess(w, map[string]string{"status": "deleted"})
+	return filter
 }

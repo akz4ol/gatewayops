@@ -1,168 +1,180 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/akz4ol/gatewayops/gateway/internal/audit"
+	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/akz4ol/gatewayops/gateway/internal/domain"
-	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
-	"github.com/akz4ol/gatewayops/gateway/internal/service"
+	"github.com/rs/zerolog"
 )
 
-// AuditHandler handles audit log endpoints.
+// AuditHandler handles audit log HTTP requests.
 type AuditHandler struct {
-	auditService *service.AuditService
+	logger      zerolog.Logger
+	auditLogger *audit.Logger
 }
 
 // NewAuditHandler creates a new audit handler.
-func NewAuditHandler(auditService *service.AuditService) *AuditHandler {
+func NewAuditHandler(logger zerolog.Logger, auditLogger *audit.Logger) *AuditHandler {
 	return &AuditHandler{
-		auditService: auditService,
+		logger:      logger,
+		auditLogger: auditLogger,
 	}
 }
 
-// List retrieves audit logs with filtering.
+// List returns paginated audit logs.
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	// Parse query parameters
-	filter := domain.AuditLogFilter{
-		OrgID: authInfo.OrgID,
-	}
-
-	if teamID := r.URL.Query().Get("team_id"); teamID != "" {
-		id, err := uuid.Parse(teamID)
-		if err == nil {
-			filter.TeamID = &id
-		}
-	}
-
-	if userID := r.URL.Query().Get("user_id"); userID != "" {
-		id, err := uuid.Parse(userID)
-		if err == nil {
-			filter.UserID = &id
-		}
-	}
-
-	if apiKeyID := r.URL.Query().Get("api_key_id"); apiKeyID != "" {
-		id, err := uuid.Parse(apiKeyID)
-		if err == nil {
-			filter.APIKeyID = &id
-		}
-	}
-
-	if actions := r.URL.Query()["action"]; len(actions) > 0 {
-		for _, a := range actions {
-			filter.Actions = append(filter.Actions, domain.AuditAction(a))
-		}
-	}
-
-	if outcomes := r.URL.Query()["outcome"]; len(outcomes) > 0 {
-		for _, o := range outcomes {
-			filter.Outcomes = append(filter.Outcomes, domain.AuditOutcome(o))
-		}
-	}
-
-	if resource := r.URL.Query().Get("resource"); resource != "" {
-		filter.Resource = resource
-	}
-
-	if startTime := r.URL.Query().Get("start_time"); startTime != "" {
-		t, err := time.Parse(time.RFC3339, startTime)
-		if err == nil {
-			filter.StartTime = &t
-		}
-	}
-
-	if endTime := r.URL.Query().Get("end_time"); endTime != "" {
-		t, err := time.Parse(time.RFC3339, endTime)
-		if err == nil {
-			filter.EndTime = &t
-		}
-	}
-
-	if limit := r.URL.Query().Get("limit"); limit != "" {
-		l, err := strconv.Atoi(limit)
-		if err == nil {
-			filter.Limit = l
-		}
-	}
-
-	if offset := r.URL.Query().Get("offset"); offset != "" {
-		o, err := strconv.Atoi(offset)
-		if err == nil {
-			filter.Offset = o
-		}
-	}
-
-	// Get audit logs
-	page, err := h.auditService.List(r.Context(), filter)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list audit logs")
-		return
-	}
-
-	WriteSuccess(w, page)
+	filter := h.parseFilter(r)
+	page := h.auditLogger.GetLogs(filter)
+	WriteJSON(w, http.StatusOK, page)
 }
 
-// Get retrieves a single audit log by ID.
+// Get returns a single audit log by ID.
 func (h *AuditHandler) Get(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
-		return
-	}
-
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	idStr := chi.URLParam(r, "logID")
+	id, err := uuid.Parse(idStr)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_id", "Invalid audit log ID")
 		return
 	}
 
-	log, err := h.auditService.Get(r.Context(), authInfo.OrgID, id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get audit log")
-		return
-	}
-
+	log := h.auditLogger.GetLog(id)
 	if log == nil {
 		WriteError(w, http.StatusNotFound, "not_found", "Audit log not found")
 		return
 	}
 
-	WriteSuccess(w, log)
+	WriteJSON(w, http.StatusOK, log)
 }
 
-// Search searches audit logs with advanced filtering.
+// Search performs a text search across audit logs.
 func (h *AuditHandler) Search(w http.ResponseWriter, r *http.Request) {
-	authInfo := middleware.GetAuthInfo(r.Context())
-	if authInfo == nil {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		WriteError(w, http.StatusBadRequest, "validation_error", "Search query 'q' is required")
 		return
 	}
 
-	var filter domain.AuditLogFilter
-	if err := json.NewDecoder(r.Body).Decode(&filter); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
+	filter := h.parseFilter(r)
+	page := h.auditLogger.Search(query, filter)
+	WriteJSON(w, http.StatusOK, page)
+}
+
+// Export exports audit logs in the specified format.
+func (h *AuditHandler) Export(w http.ResponseWriter, r *http.Request) {
+	filter := h.parseFilter(r)
+
+	// Get format from query param
+	formatStr := r.URL.Query().Get("format")
+	format := domain.AuditExportJSON
+	if formatStr == "csv" {
+		format = domain.AuditExportCSV
 	}
 
-	// Override org_id with authenticated org
-	filter.OrgID = authInfo.OrgID
+	// Remove limit for export
+	filter.Limit = 10000
 
-	page, err := h.auditService.Search(r.Context(), filter)
+	data, err := h.auditLogger.Export(filter, format)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to search audit logs")
+		WriteError(w, http.StatusInternalServerError, "export_error", "Failed to export audit logs")
 		return
 	}
 
-	WriteSuccess(w, page)
+	// Set appropriate headers
+	switch format {
+	case domain.AuditExportCSV:
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename=audit-logs.csv")
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename=audit-logs.json")
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+// Stats returns audit log statistics.
+func (h *AuditHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	stats := h.auditLogger.GetStats()
+	WriteJSON(w, http.StatusOK, stats)
+}
+
+// parseFilter parses filter parameters from the request.
+func (h *AuditHandler) parseFilter(r *http.Request) domain.AuditLogFilter {
+	query := r.URL.Query()
+
+	filter := domain.AuditLogFilter{
+		OrgID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), // Demo org
+	}
+
+	// Parse actions
+	if actionsStr := query.Get("actions"); actionsStr != "" {
+		actions := strings.Split(actionsStr, ",")
+		for _, a := range actions {
+			filter.Actions = append(filter.Actions, domain.AuditAction(strings.TrimSpace(a)))
+		}
+	}
+
+	// Parse outcomes
+	if outcomesStr := query.Get("outcomes"); outcomesStr != "" {
+		outcomes := strings.Split(outcomesStr, ",")
+		for _, o := range outcomes {
+			filter.Outcomes = append(filter.Outcomes, domain.AuditOutcome(strings.TrimSpace(o)))
+		}
+	}
+
+	// Parse resource
+	if resource := query.Get("resource"); resource != "" {
+		filter.Resource = resource
+	}
+
+	// Parse user ID
+	if userIDStr := query.Get("user_id"); userIDStr != "" {
+		if userID, err := uuid.Parse(userIDStr); err == nil {
+			filter.UserID = &userID
+		}
+	}
+
+	// Parse API key ID
+	if apiKeyIDStr := query.Get("api_key_id"); apiKeyIDStr != "" {
+		if apiKeyID, err := uuid.Parse(apiKeyIDStr); err == nil {
+			filter.APIKeyID = &apiKeyID
+		}
+	}
+
+	// Parse time range
+	if startStr := query.Get("start_time"); startStr != "" {
+		if start, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartTime = &start
+		}
+	}
+	if endStr := query.Get("end_time"); endStr != "" {
+		if end, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndTime = &end
+		}
+	}
+
+	// Parse pagination
+	if limitStr := query.Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			filter.Limit = limit
+		}
+	}
+	if filter.Limit == 0 {
+		filter.Limit = 50
+	}
+
+	if offsetStr := query.Get("offset"); offsetStr != "" {
+		if offset, err := strconv.Atoi(offsetStr); err == nil && offset >= 0 {
+			filter.Offset = offset
+		}
+	}
+
+	return filter
 }

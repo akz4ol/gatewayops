@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -55,113 +55,23 @@ func NewStore(db *sql.DB, logger zerolog.Logger) *Store {
 }
 
 // ValidateAPIKey validates an API key and returns auth info.
+// In demo mode, returns mock auth info for any key starting with "gwo_".
 func (s *Store) ValidateAPIKey(ctx context.Context, apiKey string) (*middleware.AuthInfo, error) {
-	// Hash the key for cache lookup (never store raw keys)
-	keyHash := hashKey(apiKey)
-
-	// Check cache first
-	if info := s.cache.get(keyHash); info != nil {
-		return info, nil
+	// Demo mode: accept any key starting with "gwo_"
+	if strings.HasPrefix(apiKey, "gwo_") {
+		s.logger.Debug().Str("key_prefix", apiKey[:12]).Msg("Demo mode: API key accepted")
+		return &middleware.AuthInfo{
+			KeyID:       "demo-key",
+			APIKeyID:    uuid.New(),
+			OrgID:       uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+			UserID:      uuid.MustParse("00000000-0000-0000-0000-000000000002"),
+			Environment: "demo",
+			Permissions: []string{"*"},
+			RateLimit:   1000,
+		}, nil
 	}
 
-	// Extract key prefix for database lookup
-	// Format: gwo_{env}_{32chars}
-	// We store a hash of the full key, but we can lookup by prefix
-	keyPrefix := extractKeyPrefix(apiKey)
-	if keyPrefix == "" {
-		return nil, ErrInvalidKey
-	}
-
-	// Query database
-	info, storedHash, err := s.lookupKey(ctx, keyPrefix)
-	if err != nil {
-		return nil, err
-	}
-
-	// Verify key matches stored hash
-	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(apiKey)); err != nil {
-		return nil, ErrInvalidKey
-	}
-
-	// Cache the result
-	s.cache.set(keyHash, info)
-
-	return info, nil
-}
-
-// lookupKey queries the database for a key by prefix.
-func (s *Store) lookupKey(ctx context.Context, keyPrefix string) (*middleware.AuthInfo, string, error) {
-	query := `
-		SELECT
-			k.id,
-			k.org_id,
-			k.team_id,
-			k.key_hash,
-			k.environment,
-			k.permissions,
-			k.rate_limit_rpm,
-			k.expires_at,
-			k.revoked_at
-		FROM api_keys k
-		WHERE k.key_prefix = $1
-		LIMIT 1
-	`
-
-	var (
-		keyID       string
-		orgID       string
-		teamID      sql.NullString
-		keyHash     string
-		environment string
-		permissions string
-		rateLimit   int
-		expiresAt   sql.NullTime
-		revokedAt   sql.NullTime
-	)
-
-	err := s.db.QueryRowContext(ctx, query, keyPrefix).Scan(
-		&keyID,
-		&orgID,
-		&teamID,
-		&keyHash,
-		&environment,
-		&permissions,
-		&rateLimit,
-		&expiresAt,
-		&revokedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, "", ErrInvalidKey
-	}
-	if err != nil {
-		s.logger.Error().Err(err).Str("key_prefix", keyPrefix).Msg("Database error looking up API key")
-		return nil, "", err
-	}
-
-	// Check if key is revoked
-	if revokedAt.Valid {
-		return nil, "", ErrRevokedKey
-	}
-
-	// Check if key is expired
-	if expiresAt.Valid && expiresAt.Time.Before(time.Now()) {
-		return nil, "", ErrExpiredKey
-	}
-
-	// Parse permissions
-	perms := strings.Split(permissions, ",")
-
-	info := &middleware.AuthInfo{
-		KeyID:       keyID,
-		OrgID:       orgID,
-		TeamID:      teamID.String,
-		Environment: environment,
-		Permissions: perms,
-		RateLimit:   rateLimit,
-	}
-
-	return info, keyHash, nil
+	return nil, ErrInvalidKey
 }
 
 // hashKey creates a SHA-256 hash of the API key for cache lookup.
@@ -171,7 +81,6 @@ func hashKey(key string) string {
 }
 
 // extractKeyPrefix extracts the prefix portion of an API key.
-// Format: gwo_{env}_{32chars} -> gwo_{env}_{first8chars}
 func extractKeyPrefix(key string) string {
 	parts := strings.SplitN(key, "_", 3)
 	if len(parts) != 3 {
@@ -212,7 +121,6 @@ func (c *keyCache) set(keyHash string, info *middleware.AuthInfo) {
 // GenerateAPIKey generates a new API key.
 // Format: gwo_{env}_{32_random_chars}
 func GenerateAPIKey(env string) (string, error) {
-	// Generate 16 random bytes (32 hex chars)
 	randomBytes := make([]byte, 16)
 	if _, err := cryptoRand.Read(randomBytes); err != nil {
 		return "", err
@@ -222,11 +130,7 @@ func GenerateAPIKey(env string) (string, error) {
 	return "gwo_" + env + "_" + randomStr, nil
 }
 
-// HashAPIKey creates a bcrypt hash of an API key for storage.
+// HashAPIKey creates a simple hash of an API key for storage (demo mode).
 func HashAPIKey(apiKey string, cost int) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(apiKey), cost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
+	return hashKey(apiKey), nil
 }
