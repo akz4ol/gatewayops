@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # GatewayOps API Gateway
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - GATEWAY_ENV=development
+      - GATEWAY_PORT=8080
+      - GATEWAY_LOG_LEVEL=debug
+      - DATABASE_URL=postgres://gatewayops:gatewayops@postgres:5432/gatewayops?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - CLICKHOUSE_URL=clickhouse://clickhouse:9000/gatewayops
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gatewayops
+
+  # Dashboard (Next.js)
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - GATEWAYOPS_API_URL=http://gateway:8080
+    depends_on:
+      - gateway
+    restart: unless-stopped
+    networks:
+      - gatewayops
+
+  # PostgreSQL - Primary database
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=gatewayops
+      - POSTGRES_PASSWORD=gatewayops
+      - POSTGRES_DB=gatewayops
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gatewayops"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - gatewayops
+
+  # Redis - Rate limiting & caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - gatewayops
+
+  # ClickHouse - Analytics & traces
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    ports:
+      - "8123:8123"  # HTTP
+      - "9000:9000"  # Native
+    environment:
+      - CLICKHOUSE_USER=gatewayops
+      - CLICKHOUSE_PASSWORD=gatewayops
+      - CLICKHOUSE_DB=gatewayops
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - gatewayops
+
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
+
+networks:
+  gatewayops:
+    driver: bridge
