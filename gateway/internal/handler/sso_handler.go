@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/akz4ol/gatewayops/gateway/internal/sso"
@@ -181,7 +183,25 @@ func (h *SSOHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 	// Build callback URL
 	callbackURL := h.baseURL + "/v1/sso/callback/" + providerID.String()
 
-	// Get authorization URL
+	// Check if this is a demo provider (demo mode bypass)
+	// Demo providers have client IDs starting with "demo-"
+	if strings.HasPrefix(provider.ClientID, "demo-") {
+		h.logger.Info().
+			Str("provider_id", providerID.String()).
+			Str("provider_type", string(provider.Type)).
+			Msg("Demo mode SSO: bypassing real OAuth flow")
+
+		// In demo mode, redirect directly to callback with mock code
+		demoCallbackURL := fmt.Sprintf("%s?code=demo_auth_code_%s&state=%s",
+			callbackURL,
+			providerID.String()[:8],
+			state.State,
+		)
+		http.Redirect(w, r, demoCallbackURL, http.StatusFound)
+		return
+	}
+
+	// Get authorization URL for real providers
 	authURL, err := h.service.GetAuthorizationURL(providerID, state, callbackURL)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("Failed to get authorization URL")
@@ -272,7 +292,7 @@ func (h *SSOHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set session cookie and redirect
+	// Set session cookie for same-origin requests
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    session.AccessToken,
@@ -283,7 +303,16 @@ func (h *SSOHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	http.Redirect(w, r, state.RedirectURL, http.StatusFound)
+	// For cross-origin dashboard, pass token in redirect URL
+	// The frontend callback page will store it in localStorage
+	redirectWithToken := state.RedirectURL
+	if strings.Contains(redirectWithToken, "?") {
+		redirectWithToken += "&token=" + session.AccessToken
+	} else {
+		redirectWithToken += "?token=" + session.AccessToken
+	}
+
+	http.Redirect(w, r, redirectWithToken, http.StatusFound)
 }
 
 // Logout logs out the current user.

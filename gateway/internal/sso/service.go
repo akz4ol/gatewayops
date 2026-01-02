@@ -96,18 +96,36 @@ func (s *Service) createDemoData() {
 		ID:               uuid.New(),
 		OrgID:            orgID,
 		Type:             domain.SSOProviderGoogle,
-		Name:             "Demo Google Workspace",
+		Name:             "Google Workspace",
 		IssuerURL:        "https://accounts.google.com",
 		ClientID:         "demo-google-client-id",
 		AuthorizationURL: "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:         "https://oauth2.googleapis.com/token",
 		UserInfoURL:      "https://openidconnect.googleapis.com/v1/userinfo",
 		Scopes:           []string{"openid", "profile", "email"},
-		Enabled:          false,
+		Enabled:          true, // Enable for demo
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 	}
 	s.providers[googleProvider.ID] = googleProvider
+
+	// Demo Auth0 provider
+	auth0Provider := &domain.SSOProvider{
+		ID:               uuid.New(),
+		OrgID:            orgID,
+		Type:             domain.SSOProviderAuth0,
+		Name:             "Auth0",
+		IssuerURL:        "https://demo.auth0.com",
+		ClientID:         "demo-auth0-client-id",
+		AuthorizationURL: "https://demo.auth0.com/authorize",
+		TokenURL:         "https://demo.auth0.com/oauth/token",
+		UserInfoURL:      "https://demo.auth0.com/userinfo",
+		Scopes:           []string{"openid", "profile", "email"},
+		Enabled:          true, // Enable for demo
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+	s.providers[auth0Provider.ID] = auth0Provider
 
 	// Demo user
 	now := time.Now()
