@@ -48,3 +48,13 @@ type APIKeyUsage struct {
 	TotalCost     float64   `json:"total_cost"`
 	LastUsedAt    time.Time `json:"last_used_at"`
 }
+
+// APIKeyFilter represents filtering options for listing API keys.
+type APIKeyFilter struct {
+	OrgID          uuid.UUID
+	TeamID         *uuid.UUID
+	Environment    string
+	IncludeRevoked bool
+	Limit          int
+	Offset         int
+}

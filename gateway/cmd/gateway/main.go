@@ -72,6 +72,7 @@ func main() {
 	alertRepo := repository.NewAlertRepository(postgres.DB)
 	safetyRepo := repository.NewSafetyRepository(postgres.DB)
 	toolRepo := repository.NewToolRepository(postgres.DB)
+	apiKeyRepo := repository.NewAPIKeyRepository(postgres.DB)
 
 	// Initialize auth store
 	authStore := auth.NewStore(postgres.DB, logger)
@@ -105,7 +106,7 @@ func main() {
 	mcpHandler := handler.NewMCPHandler(cfg, logger, traceRepo)
 	traceHandler := handler.NewTraceHandler(logger, traceRepo)
 	costHandler := handler.NewCostHandler(logger, costRepo)
-	apiKeyHandler := handler.NewAPIKeyHandler(logger)
+	apiKeyHandler := handler.NewAPIKeyHandler(logger, apiKeyRepo)
 	metricsHandler := handler.NewMetricsHandler(logger)
 	docsHandler := handler.NewDocsHandler(logger, openAPISpec)
 	safetyHandler := handler.NewSafetyHandler(logger, injectionDetector)
@@ -497,6 +498,12 @@ ON CONFLICT DO NOTHING;
 INSERT INTO organizations (id, name, slug) VALUES
     ('00000000-0000-0000-0000-000000000001', 'Demo Organization', 'demo')
 ON CONFLICT DO NOTHING;
+
+-- Insert demo users
+INSERT INTO users (id, org_id, email, name, role) VALUES
+    ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'sarah@acme.com', 'Sarah Chen', 'admin'),
+    ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'demo@acme.com', 'Demo User', 'developer')
+ON CONFLICT DO NOTHING;
 `,
 		"002_add_service_columns.sql": `
 -- Migration 002: Add missing columns for service persistence
@@ -539,6 +546,13 @@ CREATE INDEX IF NOT EXISTS idx_safety_policies_org_enabled ON safety_policies(or
 CREATE INDEX IF NOT EXISTS idx_tool_approvals_requested_at ON tool_approvals(requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_injection_detections_type ON injection_detections(type);
 CREATE INDEX IF NOT EXISTS idx_injection_detections_mcp_server ON injection_detections(mcp_server);
+`,
+		"003_add_demo_users.sql": `
+-- Migration 003: Add demo users for API key creation
+INSERT INTO users (id, org_id, email, name, role) VALUES
+    ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'sarah@acme.com', 'Sarah Chen', 'admin'),
+    ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'demo@acme.com', 'Demo User', 'developer')
+ON CONFLICT DO NOTHING;
 `,
 	}
 }
