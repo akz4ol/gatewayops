@@ -63,3 +63,7 @@ export type {
   // Other
   APIKey,
 } from './types';
+
+// Helper functions
+export { hasMoreTraces } from './types/traces';
+export { getTotalCost, getRequestCount } from './types/costs';

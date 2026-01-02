@@ -13,16 +13,18 @@ export interface CostBreakdown {
 }
 
 /**
- * Cost summary for a period
+ * Cost summary for a period (matches API response)
  */
 export interface CostSummary {
-  totalCost: number;
-  periodStart: Date;
-  periodEnd: Date;
-  requestCount: number;
-  byServer?: CostBreakdown[];
-  byTeam?: CostBreakdown[];
-  byTool?: CostBreakdown[];
+  total_cost: number;
+  total_requests: number;
+  avg_cost_per_request: number;
+  period: string;
+  start_date: string;
+  end_date: string;
+  by_server?: CostBreakdown[];
+  by_team?: CostBreakdown[];
+  by_tool?: CostBreakdown[];
 }
 
 /**
@@ -34,3 +36,17 @@ export type CostPeriod = 'day' | 'week' | 'month';
  * Grouping dimension for cost queries
  */
 export type CostGroupBy = 'server' | 'team' | 'tool';
+
+/**
+ * Helper to get total cost from summary
+ */
+export function getTotalCost(summary: CostSummary): number {
+  return summary.total_cost;
+}
+
+/**
+ * Helper to get request count from summary
+ */
+export function getRequestCount(summary: CostSummary): number {
+  return summary.total_requests;
+}

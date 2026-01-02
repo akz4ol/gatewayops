@@ -115,14 +115,21 @@ class Trace(BaseModel):
 class TracePage(BaseModel):
     """Represents a paginated list of traces."""
 
-    traces: List[Trace]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool = Field(alias="hasMore")
+    traces: Optional[List[Trace]] = None
+    total: int = 0
+    limit: int = 20
+    offset: int = 0
 
-    class Config:
-        populate_by_name = True
+    @property
+    def has_more(self) -> bool:
+        """Check if there are more traces to fetch."""
+        return self.offset + self.limit < self.total
+
+    def __init__(self, **data):
+        # Convert null traces to empty list
+        if data.get("traces") is None:
+            data["traces"] = []
+        super().__init__(**data)
 
 
 class CostBreakdown(BaseModel):
@@ -140,16 +147,28 @@ class CostBreakdown(BaseModel):
 class CostSummary(BaseModel):
     """Represents a cost summary."""
 
-    total_cost: float = Field(alias="totalCost")
-    period_start: datetime = Field(alias="periodStart")
-    period_end: datetime = Field(alias="periodEnd")
-    request_count: int = Field(alias="requestCount")
-    by_server: Optional[List[CostBreakdown]] = Field(default=None, alias="byServer")
-    by_team: Optional[List[CostBreakdown]] = Field(default=None, alias="byTeam")
-    by_tool: Optional[List[CostBreakdown]] = Field(default=None, alias="byTool")
+    total_cost: float = 0.0
+    total_requests: int = 0
+    avg_cost_per_request: float = 0.0
+    period: str = "month"
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    by_server: Optional[List[CostBreakdown]] = None
+    by_team: Optional[List[CostBreakdown]] = None
+    by_tool: Optional[List[CostBreakdown]] = None
 
-    class Config:
-        populate_by_name = True
+    # Aliases for backwards compatibility
+    @property
+    def period_start(self) -> Optional[datetime]:
+        return self.start_date
+
+    @property
+    def period_end(self) -> Optional[datetime]:
+        return self.end_date
+
+    @property
+    def request_count(self) -> int:
+        return self.total_requests
 
 
 class APIKey(BaseModel):

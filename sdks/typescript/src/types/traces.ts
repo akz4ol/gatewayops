@@ -55,11 +55,17 @@ export type TraceStatus = 'success' | 'error' | 'timeout';
  * Paginated list of traces
  */
 export interface TracePage {
-  traces: Trace[];
+  traces: Trace[] | null;
   total: number;
   limit: number;
   offset: number;
-  hasMore: boolean;
+}
+
+/**
+ * Helper to check if there are more traces
+ */
+export function hasMoreTraces(page: TracePage): boolean {
+  return page.offset + page.limit < page.total;
 }
 
 /**
