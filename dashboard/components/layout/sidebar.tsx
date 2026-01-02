@@ -11,8 +11,11 @@ import {
   Shield,
   Bell,
   Users,
+  FileText,
+  CheckSquare,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard },
@@ -27,6 +30,10 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user } = useAuth();
+
+  const orgName = user?.org_name || 'Organization';
+  const orgInitial = orgName.charAt(0).toUpperCase();
 
   return (
     <div className="flex h-full w-64 flex-col bg-gray-900">
@@ -60,11 +67,11 @@ export function Sidebar() {
 
       <div className="border-t border-gray-800 p-4">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-full bg-gray-700 flex items-center justify-center">
-            <span className="text-sm font-medium text-white">A</span>
+          <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center">
+            <span className="text-sm font-medium text-white">{orgInitial}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate">Acme Corp</p>
+            <p className="text-sm font-medium text-white truncate">{orgName}</p>
             <p className="text-xs text-gray-400 truncate">Production</p>
           </div>
         </div>
