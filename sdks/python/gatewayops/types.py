@@ -96,17 +96,21 @@ class Trace(BaseModel):
     """Represents a distributed trace."""
 
     id: str
-    org_id: str = Field(alias="orgId")
-    api_key_id: Optional[str] = Field(default=None, alias="apiKeyId")
-    mcp_server: str = Field(alias="mcpServer")
+    trace_id: Optional[str] = None
+    span_id: Optional[str] = None
+    org_id: str
+    api_key_id: Optional[str] = None
+    mcp_server: str
     operation: str
+    tool_name: Optional[str] = None
     status: str
-    start_time: datetime = Field(alias="startTime")
-    end_time: Optional[datetime] = Field(default=None, alias="endTime")
-    duration_ms: Optional[int] = Field(default=None, alias="durationMs")
-    spans: Optional[List[Span]] = None
-    error_message: Optional[str] = Field(default=None, alias="errorMessage")
+    status_code: Optional[int] = None
+    duration_ms: Optional[int] = None
+    request_size: Optional[int] = None
+    response_size: Optional[int] = None
     cost: Optional[float] = None
+    error_msg: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         populate_by_name = True

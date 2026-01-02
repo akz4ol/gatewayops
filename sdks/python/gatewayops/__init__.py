@@ -9,6 +9,8 @@ Example:
     >>> result = gw.mcp("filesystem").tools.call("read_file", path="/data.csv")
 """
 
+__version__ = "0.1.2"
+
 from gatewayops.client import GatewayOps
 from gatewayops.exceptions import (
     GatewayOpsError,
@@ -28,8 +30,6 @@ from gatewayops.types import (
     Span,
     CostSummary,
 )
-
-__version__ = "0.1.1"
 __all__ = [
     "GatewayOps",
     "GatewayOpsError",
