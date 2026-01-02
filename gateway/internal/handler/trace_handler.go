@@ -15,13 +15,14 @@ import (
 
 // TraceHandler handles trace-related HTTP requests.
 type TraceHandler struct {
-	logger zerolog.Logger
-	repo   *repository.TraceRepository
+	logger   zerolog.Logger
+	repo     *repository.TraceRepository
+	demoMode bool
 }
 
 // NewTraceHandler creates a new trace handler.
-func NewTraceHandler(logger zerolog.Logger, repo *repository.TraceRepository) *TraceHandler {
-	return &TraceHandler{logger: logger, repo: repo}
+func NewTraceHandler(logger zerolog.Logger, repo *repository.TraceRepository, demoMode bool) *TraceHandler {
+	return &TraceHandler{logger: logger, repo: repo, demoMode: demoMode}
 }
 
 // List returns a list of traces for the authenticated organization.
@@ -59,16 +60,29 @@ func (h *TraceHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Return real data if we have any, or demo mode is disabled
+		if len(traces) > 0 || !h.demoMode {
+			WriteJSON(w, http.StatusOK, map[string]interface{}{
+				"traces": traces,
+				"total":  total,
+				"limit":  limit,
+				"offset": offset,
+			})
+			return
+		}
+	}
+
+	// Demo mode: return sample data
+	if !h.demoMode {
 		WriteJSON(w, http.StatusOK, map[string]interface{}{
-			"traces": traces,
-			"total":  total,
+			"traces": []domain.Trace{},
+			"total":  0,
 			"limit":  limit,
 			"offset": offset,
 		})
 		return
 	}
 
-	// Fallback to sample data if no database
 	traces := generateSampleTraces(orgID, limit, mcpServer, status)
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{

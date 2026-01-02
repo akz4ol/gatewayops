@@ -104,9 +104,9 @@ func main() {
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler(postgres, redis, rateLimiter)
 	mcpHandler := handler.NewMCPHandler(cfg, logger, traceRepo)
-	traceHandler := handler.NewTraceHandler(logger, traceRepo)
-	costHandler := handler.NewCostHandler(logger, costRepo)
-	apiKeyHandler := handler.NewAPIKeyHandler(logger, apiKeyRepo)
+	traceHandler := handler.NewTraceHandler(logger, traceRepo, cfg.Server.DemoMode)
+	costHandler := handler.NewCostHandler(logger, costRepo, cfg.Server.DemoMode)
+	apiKeyHandler := handler.NewAPIKeyHandler(logger, apiKeyRepo, cfg.Server.DemoMode)
 	metricsHandler := handler.NewMetricsHandler(logger)
 	docsHandler := handler.NewDocsHandler(logger, openAPISpec)
 	safetyHandler := handler.NewSafetyHandler(logger, injectionDetector)

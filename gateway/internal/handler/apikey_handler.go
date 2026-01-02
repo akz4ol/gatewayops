@@ -18,13 +18,14 @@ import (
 
 // APIKeyHandler handles API key management HTTP requests.
 type APIKeyHandler struct {
-	logger zerolog.Logger
-	repo   *repository.APIKeyRepository
+	logger   zerolog.Logger
+	repo     *repository.APIKeyRepository
+	demoMode bool
 }
 
 // NewAPIKeyHandler creates a new API key handler.
-func NewAPIKeyHandler(logger zerolog.Logger, repo *repository.APIKeyRepository) *APIKeyHandler {
-	return &APIKeyHandler{logger: logger, repo: repo}
+func NewAPIKeyHandler(logger zerolog.Logger, repo *repository.APIKeyRepository, demoMode bool) *APIKeyHandler {
+	return &APIKeyHandler{logger: logger, repo: repo, demoMode: demoMode}
 }
 
 // List returns all API keys for the authenticated organization.

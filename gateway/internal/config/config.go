@@ -24,6 +24,7 @@ type Config struct {
 type ServerConfig struct {
 	Port            string
 	Env             string
+	DemoMode        bool // Enable demo data fallback when database is empty
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -86,10 +87,15 @@ type MCPPricing struct {
 
 // Load loads configuration from environment variables.
 func Load() (*Config, error) {
+	env := getEnv("ENV", "development")
+	// Demo mode defaults to true in development, false in production
+	demoModeDefault := env != "production"
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:            getEnv("PORT", "8080"),
-			Env:             getEnv("ENV", "development"),
+			Env:             env,
+			DemoMode:        getBoolEnv("DEMO_MODE", demoModeDefault),
 			ReadTimeout:     getDurationEnv("SERVER_READ_TIMEOUT", 30*time.Second),
 			WriteTimeout:    getDurationEnv("SERVER_WRITE_TIMEOUT", 30*time.Second),
 			IdleTimeout:     getDurationEnv("SERVER_IDLE_TIMEOUT", 120*time.Second),

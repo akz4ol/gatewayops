@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from gatewayops import __version__
 from gatewayops.exceptions import (
     GatewayOpsError,
     AuthenticationError,
@@ -69,7 +70,7 @@ class GatewayOps:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "gatewayops-python/0.1.0",
+                "User-Agent": f"gatewayops-python/{__version__}",
             },
             timeout=self.timeout,
         )

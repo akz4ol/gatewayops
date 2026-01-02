@@ -3,6 +3,7 @@
  */
 
 import { fetch, type RequestInit, type Response } from 'undici';
+import { SDK_VERSION } from './version';
 import type {
   GatewayOpsOptions,
   ToolDefinition,
@@ -117,7 +118,7 @@ export class GatewayOps {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'gatewayops-typescript/0.1.0',
+      'User-Agent': `gatewayops-typescript/${SDK_VERSION}`,
     };
 
     if (this.traceContext) {

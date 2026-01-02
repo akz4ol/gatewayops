@@ -13,13 +13,14 @@ import (
 
 // CostHandler handles cost-related HTTP requests.
 type CostHandler struct {
-	logger zerolog.Logger
-	repo   *repository.CostRepository
+	logger   zerolog.Logger
+	repo     *repository.CostRepository
+	demoMode bool
 }
 
 // NewCostHandler creates a new cost handler.
-func NewCostHandler(logger zerolog.Logger, repo *repository.CostRepository) *CostHandler {
-	return &CostHandler{logger: logger, repo: repo}
+func NewCostHandler(logger zerolog.Logger, repo *repository.CostRepository, demoMode bool) *CostHandler {
+	return &CostHandler{logger: logger, repo: repo, demoMode: demoMode}
 }
 
 // Summary returns cost summary for the authenticated organization.
@@ -64,11 +65,26 @@ func (h *CostHandler) Summary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		WriteJSON(w, http.StatusOK, summary)
+		// Return real data if we have any, or demo mode is disabled
+		if summary.TotalRequests > 0 || !h.demoMode {
+			WriteJSON(w, http.StatusOK, summary)
+			return
+		}
+	}
+
+	// Demo mode: return sample data
+	if !h.demoMode {
+		WriteJSON(w, http.StatusOK, domain.CostSummary{
+			TotalCost:     0,
+			TotalRequests: 0,
+			AvgCostPerReq: 0,
+			Period:        period,
+			StartDate:     startDate,
+			EndDate:       now,
+		})
 		return
 	}
 
-	// Fallback to sample summary
 	summary := domain.CostSummary{
 		TotalCost:     4231.89,
 		TotalRequests: 1234567,
