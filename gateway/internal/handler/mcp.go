@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/config"
+	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
+	"github.com/akz4ol/gatewayops/gateway/internal/repository"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -25,16 +28,18 @@ type MCPHandler struct {
 	config     *config.Config
 	logger     zerolog.Logger
 	httpClient *http.Client
+	traceRepo  *repository.TraceRepository
 }
 
 // NewMCPHandler creates a new MCP handler.
-func NewMCPHandler(cfg *config.Config, logger zerolog.Logger) *MCPHandler {
+func NewMCPHandler(cfg *config.Config, logger zerolog.Logger, traceRepo *repository.TraceRepository) *MCPHandler {
 	return &MCPHandler{
 		config: cfg,
 		logger: logger,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		traceRepo: traceRepo,
 	}
 }
 
@@ -139,6 +144,16 @@ func (h *MCPHandler) proxyRequest(w http.ResponseWriter, r *http.Request, endpoi
 	defer cancel()
 	proxyReq = proxyReq.WithContext(ctx)
 
+	// Extract tool name from request body for tracing
+	var mcpReq MCPRequest
+	toolName := ""
+	if err := json.Unmarshal(body, &mcpReq); err == nil {
+		toolName = mcpReq.Tool
+		if toolName == "" {
+			toolName = mcpReq.Name
+		}
+	}
+
 	// Send request to MCP server
 	resp, err := h.httpClient.Do(proxyReq)
 	if err != nil {
@@ -149,6 +164,35 @@ func (h *MCPHandler) proxyRequest(w http.ResponseWriter, r *http.Request, endpoi
 			Dur("duration", duration).
 			Str("target_url", targetURL).
 			Msg("MCP server request failed")
+
+		// Persist error trace
+		if h.traceRepo != nil {
+			trace := &domain.Trace{
+				ID:          uuid.New(),
+				TraceID:     traceID,
+				SpanID:      spanID,
+				OrgID:       authInfo.OrgID,
+				APIKeyID:    authInfo.APIKeyID,
+				MCPServer:   serverName,
+				Operation:   endpoint,
+				ToolName:    toolName,
+				Status:      "error",
+				StatusCode:  502,
+				DurationMs:  duration.Milliseconds(),
+				RequestSize: len(body),
+				ErrorMsg:    err.Error(),
+				CreatedAt:   time.Now(),
+			}
+			if authInfo.TeamID != uuid.Nil {
+				trace.TeamID = &authInfo.TeamID
+			}
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				h.traceRepo.Create(ctx, trace)
+			}()
+		}
+
 		WriteError(w, http.StatusBadGateway, "upstream_error", "Failed to reach MCP server")
 		return
 	}
@@ -164,21 +208,63 @@ func (h *MCPHandler) proxyRequest(w http.ResponseWriter, r *http.Request, endpoi
 
 	duration := time.Since(start)
 
+	// Calculate cost (simple per-call pricing for now)
+	cost := serverConfig.Pricing.PerCall
+
+	// Determine status
+	status := "success"
+	var errorMsg string
+	if resp.StatusCode >= 400 {
+		status = "error"
+		errorMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+
 	h.logger.Info().
 		Str("trace_id", traceID).
 		Str("span_id", spanID).
 		Str("server", serverName).
 		Str("endpoint", endpoint).
+		Str("tool", toolName).
 		Int("status", resp.StatusCode).
 		Int("response_size", len(respBody)).
 		Dur("duration", duration).
+		Float64("cost", cost).
 		Msg("MCP request completed")
 
-	// Calculate cost (simple per-call pricing for now)
-	cost := serverConfig.Pricing.PerCall
+	// Persist trace to database
+	if h.traceRepo != nil {
+		trace := &domain.Trace{
+			ID:           uuid.New(),
+			TraceID:      traceID,
+			SpanID:       spanID,
+			OrgID:        authInfo.OrgID,
+			APIKeyID:     authInfo.APIKeyID,
+			MCPServer:    serverName,
+			Operation:    endpoint,
+			ToolName:     toolName,
+			Status:       status,
+			StatusCode:   resp.StatusCode,
+			DurationMs:   duration.Milliseconds(),
+			RequestSize:  len(body),
+			ResponseSize: len(respBody),
+			Cost:         cost,
+			ErrorMsg:     errorMsg,
+			CreatedAt:    time.Now(),
+		}
 
-	// TODO: Publish trace span to Redis Streams for async processing
-	// TODO: Publish cost event to ClickHouse
+		if authInfo.TeamID != uuid.Nil {
+			trace.TeamID = &authInfo.TeamID
+		}
+
+		// Create trace asynchronously to not block response
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := h.traceRepo.Create(ctx, trace); err != nil {
+				h.logger.Error().Err(err).Str("trace_id", traceID).Msg("Failed to persist trace")
+			}
+		}()
+	}
 
 	// Forward response to client
 	w.Header().Set("Content-Type", "application/json")

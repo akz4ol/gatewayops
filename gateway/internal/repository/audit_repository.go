@@ -25,6 +25,10 @@ func NewAuditRepository(db *sql.DB) *AuditRepository {
 
 // Create inserts a new audit log entry.
 func (r *AuditRepository) Create(ctx context.Context, log *domain.AuditLog) error {
+	if r.db == nil {
+		return nil // Silently skip if no DB
+	}
+
 	details, err := json.Marshal(log.Details)
 	if err != nil {
 		return fmt.Errorf("marshal details: %w", err)
@@ -53,6 +57,10 @@ func (r *AuditRepository) Create(ctx context.Context, log *domain.AuditLog) erro
 
 // Get retrieves an audit log by ID.
 func (r *AuditRepository) Get(ctx context.Context, orgID, id uuid.UUID) (*domain.AuditLog, error) {
+	if r.db == nil {
+		return nil, nil
+	}
+
 	query := `
 		SELECT id, org_id, team_id, user_id, api_key_id, trace_id,
 			   action, resource, resource_id, outcome, details,
@@ -100,6 +108,10 @@ func (r *AuditRepository) Get(ctx context.Context, orgID, id uuid.UUID) (*domain
 
 // List retrieves audit logs with filtering and pagination.
 func (r *AuditRepository) List(ctx context.Context, filter domain.AuditLogFilter) (*domain.AuditLogPage, error) {
+	if r.db == nil {
+		return &domain.AuditLogPage{}, nil
+	}
+
 	var conditions []string
 	var args []interface{}
 	argNum := 1
@@ -251,6 +263,10 @@ func (r *AuditRepository) List(ctx context.Context, filter domain.AuditLogFilter
 
 // DeleteOlderThan deletes audit logs older than the specified time.
 func (r *AuditRepository) DeleteOlderThan(ctx context.Context, orgID uuid.UUID, before time.Time) (int64, error) {
+	if r.db == nil {
+		return 0, nil
+	}
+
 	result, err := r.db.ExecContext(ctx,
 		"DELETE FROM audit_logs WHERE org_id = $1 AND created_at < $2",
 		orgID, before,

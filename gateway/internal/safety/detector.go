@@ -2,12 +2,14 @@
 package safety
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
+	"github.com/akz4ol/gatewayops/gateway/internal/repository"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
@@ -15,6 +17,7 @@ import (
 // Detector implements prompt injection detection.
 type Detector struct {
 	logger      zerolog.Logger
+	repo        *repository.SafetyRepository
 	policies    map[uuid.UUID]*domain.SafetyPolicy
 	mu          sync.RWMutex
 	detections  []domain.InjectionDetection
@@ -22,22 +25,55 @@ type Detector struct {
 }
 
 // NewDetector creates a new injection detector.
-func NewDetector(logger zerolog.Logger) *Detector {
+func NewDetector(logger zerolog.Logger, repo *repository.SafetyRepository) *Detector {
 	d := &Detector{
 		logger:     logger,
+		repo:       repo,
 		policies:   make(map[uuid.UUID]*domain.SafetyPolicy),
 		detections: make([]domain.InjectionDetection, 0),
 	}
 
-	// Create default policy
-	defaultPolicy := d.createDefaultPolicy()
-	d.policies[defaultPolicy.ID] = defaultPolicy
+	// Load from database if available
+	if repo != nil {
+		d.loadFromDatabase()
+	} else {
+		// Create default policy
+		defaultPolicy := d.createDefaultPolicy()
+		d.policies[defaultPolicy.ID] = defaultPolicy
+	}
 
 	logger.Info().
 		Int("default_block_patterns", len(domain.DefaultBlockPatterns)).
 		Msg("Prompt injection detector initialized")
 
 	return d
+}
+
+// loadFromDatabase loads policies from the database.
+func (d *Detector) loadFromDatabase() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	demoOrgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	policies, err := d.repo.ListPolicies(ctx, demoOrgID, false)
+	if err != nil {
+		d.logger.Warn().Err(err).Msg("Failed to load safety policies from database")
+	} else {
+		for i := range policies {
+			d.policies[policies[i].ID] = &policies[i]
+		}
+		d.logger.Info().Int("count", len(policies)).Msg("Loaded safety policies from database")
+	}
+
+	// If no policies, create default
+	if len(d.policies) == 0 {
+		defaultPolicy := d.createDefaultPolicy()
+		d.policies[defaultPolicy.ID] = defaultPolicy
+		// Persist to database
+		if err := d.repo.CreatePolicy(ctx, defaultPolicy); err != nil {
+			d.logger.Warn().Err(err).Msg("Failed to persist default safety policy")
+		}
+	}
 }
 
 // createDefaultPolicy creates the default safety policy.
@@ -228,6 +264,17 @@ func (d *Detector) recordDetection(opts DetectOptions, result domain.DetectionRe
 		CreatedAt:      time.Now(),
 	}
 
+	// Persist to database asynchronously
+	if d.repo != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := d.repo.CreateDetection(ctx, &detection); err != nil {
+				d.logger.Error().Err(err).Msg("Failed to persist injection detection")
+			}
+		}()
+	}
+
 	// Keep only last 1000 detections in memory (demo mode)
 	if len(d.detections) >= 1000 {
 		d.detections = d.detections[1:]
@@ -283,6 +330,15 @@ func (d *Detector) CreatePolicy(input domain.SafetyPolicyInput, orgID, userID uu
 		CreatedBy:   userID,
 	}
 
+	// Persist to database
+	if d.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.repo.CreatePolicy(ctx, policy); err != nil {
+			d.logger.Error().Err(err).Msg("Failed to persist safety policy")
+		}
+	}
+
 	d.policies[policy.ID] = policy
 	return policy
 }
@@ -306,6 +362,15 @@ func (d *Detector) UpdatePolicy(id uuid.UUID, input domain.SafetyPolicyInput) *d
 	policy.Enabled = input.Enabled
 	policy.UpdatedAt = time.Now()
 
+	// Persist to database
+	if d.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.repo.UpdatePolicy(ctx, policy); err != nil {
+			d.logger.Error().Err(err).Msg("Failed to update safety policy in database")
+		}
+	}
+
 	return policy
 }
 
@@ -320,6 +385,14 @@ func (d *Detector) DeletePolicy(id uuid.UUID) bool {
 	}
 
 	if _, exists := d.policies[id]; exists {
+		// Delete from database
+		if d.repo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := d.repo.DeletePolicy(ctx, id); err != nil {
+				d.logger.Error().Err(err).Msg("Failed to delete safety policy from database")
+			}
+		}
 		delete(d.policies, id)
 		return true
 	}

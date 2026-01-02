@@ -2,10 +2,12 @@
 package approval
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
+	"github.com/akz4ol/gatewayops/gateway/internal/repository"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
@@ -13,6 +15,7 @@ import (
 // Service manages tool classifications and approval workflows.
 type Service struct {
 	logger          zerolog.Logger
+	repo            *repository.ToolRepository
 	classifications map[string]*domain.ToolClassification // key: "server:tool"
 	approvals       []domain.ToolApproval
 	permissions     map[string]*domain.ToolPermission // key: "user_or_team:server:tool"
@@ -20,19 +23,70 @@ type Service struct {
 }
 
 // NewService creates a new approval service.
-func NewService(logger zerolog.Logger) *Service {
+func NewService(logger zerolog.Logger, repo *repository.ToolRepository) *Service {
 	s := &Service{
 		logger:          logger,
+		repo:            repo,
 		classifications: make(map[string]*domain.ToolClassification),
 		approvals:       make([]domain.ToolApproval, 0),
 		permissions:     make(map[string]*domain.ToolPermission),
 	}
 
-	// Initialize demo classifications
-	s.initDemoClassifications()
+	// Load from database if available
+	if repo != nil {
+		s.loadFromDatabase()
+	} else {
+		// Initialize demo classifications
+		s.initDemoClassifications()
+	}
 
 	logger.Info().Msg("Tool approval service initialized")
 	return s
+}
+
+// loadFromDatabase loads classifications and approvals from the database.
+func (s *Service) loadFromDatabase() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	demoOrgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	// Load classifications
+	classifications, err := s.repo.ListClassifications(ctx, demoOrgID, "")
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to load tool classifications from database")
+	} else {
+		for i := range classifications {
+			key := classificationKey(classifications[i].MCPServer, classifications[i].ToolName)
+			s.classifications[key] = &classifications[i]
+		}
+		s.logger.Info().Int("count", len(classifications)).Msg("Loaded tool classifications from database")
+	}
+
+	// Load pending approvals
+	filter := domain.ToolApprovalFilter{
+		OrgID:    demoOrgID,
+		Statuses: []domain.ApprovalStatus{domain.ApprovalStatusPending},
+		Limit:    100,
+	}
+	approvalPage, err := s.repo.ListApprovals(ctx, filter)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to load tool approvals from database")
+	} else if approvalPage != nil {
+		s.approvals = approvalPage.Approvals
+		s.logger.Info().Int("count", len(s.approvals)).Msg("Loaded tool approvals from database")
+	}
+
+	// If no classifications, create defaults
+	if len(s.classifications) == 0 {
+		s.initDemoClassifications()
+		// Persist defaults to database
+		for _, c := range s.classifications {
+			if err := s.repo.CreateClassification(ctx, c); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to persist default classification")
+			}
+		}
+	}
 }
 
 func (s *Service) initDemoClassifications() {
@@ -157,6 +211,15 @@ func (s *Service) SetClassification(input domain.ToolClassificationInput, orgID,
 		classification.CreatedAt = existing.CreatedAt
 	}
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.CreateClassification(ctx, classification); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to persist tool classification")
+		}
+	}
+
 	s.classifications[key] = classification
 
 	s.logger.Info().
@@ -170,12 +233,20 @@ func (s *Service) SetClassification(input domain.ToolClassificationInput, orgID,
 }
 
 // DeleteClassification removes a classification.
-func (s *Service) DeleteClassification(server, tool string) bool {
+func (s *Service) DeleteClassification(server, tool string, orgID uuid.UUID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	key := classificationKey(server, tool)
 	if _, exists := s.classifications[key]; exists {
+		// Delete from database
+		if s.repo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.repo.DeleteClassification(ctx, orgID, server, tool); err != nil {
+				s.logger.Error().Err(err).Msg("Failed to delete tool classification from database")
+			}
+		}
 		delete(s.classifications, key)
 		return true
 	}
@@ -305,6 +376,15 @@ func (s *Service) RequestApproval(input domain.ToolApprovalRequest, orgID, userI
 		TraceID:     input.TraceID,
 	}
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.CreateApproval(ctx, &approval); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to persist tool approval request")
+		}
+	}
+
 	// Keep only last 1000 approvals
 	if len(s.approvals) >= 1000 {
 		s.approvals = s.approvals[1:]
@@ -418,6 +498,15 @@ func (s *Service) ReviewApproval(id uuid.UUID, review domain.ToolApprovalReview,
 			if review.ExpiresIn != nil && *review.ExpiresIn > 0 {
 				expiresAt := now.Add(time.Duration(*review.ExpiresIn) * time.Second)
 				s.approvals[i].ExpiresAt = &expiresAt
+			}
+
+			// Persist to database
+			if s.repo != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := s.repo.UpdateApproval(ctx, &s.approvals[i]); err != nil {
+					s.logger.Error().Err(err).Msg("Failed to update tool approval in database")
+				}
 			}
 
 			s.logger.Info().

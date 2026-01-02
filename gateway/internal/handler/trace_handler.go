@@ -9,17 +9,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
 	"github.com/akz4ol/gatewayops/gateway/internal/middleware"
+	"github.com/akz4ol/gatewayops/gateway/internal/repository"
 	"github.com/rs/zerolog"
 )
 
 // TraceHandler handles trace-related HTTP requests.
 type TraceHandler struct {
 	logger zerolog.Logger
+	repo   *repository.TraceRepository
 }
 
 // NewTraceHandler creates a new trace handler.
-func NewTraceHandler(logger zerolog.Logger) *TraceHandler {
-	return &TraceHandler{logger: logger}
+func NewTraceHandler(logger zerolog.Logger, repo *repository.TraceRepository) *TraceHandler {
+	return &TraceHandler{logger: logger, repo: repo}
 }
 
 // List returns a list of traces for the authenticated organization.
@@ -40,12 +42,38 @@ func (h *TraceHandler) List(w http.ResponseWriter, r *http.Request) {
 	mcpServer := r.URL.Query().Get("server")
 	status := r.URL.Query().Get("status")
 
-	// Generate sample traces (in production, query from database)
+	filter := domain.TraceFilter{
+		OrgID:     orgID,
+		MCPServer: mcpServer,
+		Status:    status,
+		Limit:     limit,
+		Offset:    offset,
+	}
+
+	// Query from database if repository is available
+	if h.repo != nil {
+		traces, total, err := h.repo.List(r.Context(), filter)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("Failed to list traces")
+			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list traces")
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"traces": traces,
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+		})
+		return
+	}
+
+	// Fallback to sample data if no database
 	traces := generateSampleTraces(orgID, limit, mcpServer, status)
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"traces": traces,
-		"total":  100, // Would come from COUNT query
+		"total":  100,
 		"limit":  limit,
 		"offset": offset,
 	})
@@ -65,7 +93,24 @@ func (h *TraceHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate sample trace detail (in production, query from database)
+	// Query from database if repository is available
+	if h.repo != nil {
+		detail, err := h.repo.GetByTraceID(r.Context(), orgID, traceID)
+		if err != nil {
+			h.logger.Error().Err(err).Str("trace_id", traceID).Msg("Failed to get trace")
+			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get trace")
+			return
+		}
+		if detail == nil {
+			WriteError(w, http.StatusNotFound, "not_found", "Trace not found")
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, detail)
+		return
+	}
+
+	// Fallback to sample data
 	detail := generateSampleTraceDetail(traceID, orgID)
 
 	WriteJSON(w, http.StatusOK, detail)
@@ -73,9 +118,27 @@ func (h *TraceHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Stats returns aggregated trace statistics.
 func (h *TraceHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	// Auth not required for demo
+	authInfo := middleware.GetAuthInfo(r.Context())
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	if authInfo != nil {
+		orgID = authInfo.OrgID
+	}
 
-	// Generate sample stats (in production, query from database)
+	// Query from database if repository is available
+	if h.repo != nil {
+		filter := domain.TraceFilter{OrgID: orgID}
+		stats, err := h.repo.Stats(r.Context(), filter)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("Failed to get trace stats")
+			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get stats")
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, stats)
+		return
+	}
+
+	// Fallback to sample stats
 	stats := domain.TraceStats{
 		TotalRequests: 1234567,
 		SuccessCount:  1220000,

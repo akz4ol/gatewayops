@@ -92,7 +92,10 @@ func (h *ApprovalHandler) DeleteClassification(w http.ResponseWriter, r *http.Re
 	server := chi.URLParam(r, "server")
 	tool := chi.URLParam(r, "tool")
 
-	if !h.service.DeleteClassification(server, tool) {
+	// Demo org
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	if !h.service.DeleteClassification(server, tool, orgID) {
 		WriteError(w, http.StatusNotFound, "not_found", "Classification not found")
 		return
 	}

@@ -35,6 +35,8 @@ type Dependencies struct {
 	ApprovalHandler   *handler.ApprovalHandler
 	RBACHandler       *handler.RBACHandler
 	SSOHandler        *handler.SSOHandler
+	UserHandler       *handler.UserHandler
+	SettingsHandler   *handler.SettingsHandler
 }
 
 // New creates a new router with all middleware and routes configured.
@@ -280,6 +282,22 @@ func New(deps Dependencies) http.Handler {
 			})
 		}
 
+		// Users - public for demo
+		if deps.UserHandler != nil {
+			r.Route("/users", func(r chi.Router) {
+				r.Get("/", deps.UserHandler.ListUsers)
+				r.Get("/{userID}", deps.UserHandler.GetUser)
+
+				// Invitations
+				r.Route("/invites", func(r chi.Router) {
+					r.Get("/", deps.UserHandler.ListInvites)
+					r.Post("/", deps.UserHandler.CreateInvite)
+					r.Delete("/{inviteID}", deps.UserHandler.CancelInvite)
+					r.Post("/{inviteID}/resend", deps.UserHandler.ResendInvite)
+				})
+			})
+		}
+
 		// SSO Provider Management - public for demo
 		if deps.SSOHandler != nil {
 			r.Route("/sso", func(r chi.Router) {
@@ -303,6 +321,14 @@ func New(deps Dependencies) http.Handler {
 					r.Delete("/all", deps.SSOHandler.RevokeAllSessions)
 					r.Delete("/{sessionID}", deps.SSOHandler.RevokeSession)
 				})
+			})
+		}
+
+		// Settings - public for demo
+		if deps.SettingsHandler != nil {
+			r.Route("/settings", func(r chi.Router) {
+				r.Get("/", deps.SettingsHandler.GetSettings)
+				r.Put("/", deps.SettingsHandler.UpdateSettings)
 			})
 		}
 	})

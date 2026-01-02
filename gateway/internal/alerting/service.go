@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/akz4ol/gatewayops/gateway/internal/domain"
+	"github.com/akz4ol/gatewayops/gateway/internal/repository"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
@@ -18,6 +19,7 @@ import (
 // Service manages alert rules, channels, and notifications.
 type Service struct {
 	logger   zerolog.Logger
+	repo     *repository.AlertRepository
 	rules    map[uuid.UUID]*domain.AlertRule
 	channels map[uuid.UUID]*domain.AlertChannel
 	alerts   []domain.Alert
@@ -29,9 +31,10 @@ type Service struct {
 }
 
 // NewService creates a new alerting service.
-func NewService(logger zerolog.Logger) *Service {
+func NewService(logger zerolog.Logger, repo *repository.AlertRepository) *Service {
 	s := &Service{
 		logger:   logger,
+		repo:     repo,
 		rules:    make(map[uuid.UUID]*domain.AlertRule),
 		channels: make(map[uuid.UUID]*domain.AlertChannel),
 		alerts:   make([]domain.Alert, 0),
@@ -39,17 +42,76 @@ func NewService(logger zerolog.Logger) *Service {
 		metrics:  make(map[string]float64),
 	}
 
-	// Create default demo channel
-	s.createDemoChannel()
-
-	// Create default demo rule
-	s.createDemoRule()
+	// Load from database if available
+	if repo != nil {
+		s.loadFromDatabase()
+	} else {
+		// Create default demo data if no database
+		s.createDemoChannel()
+		s.createDemoRule()
+	}
 
 	// Initialize demo metrics
 	s.initDemoMetrics()
 
 	logger.Info().Msg("Alerting service initialized")
 	return s
+}
+
+// loadFromDatabase loads rules and channels from the database.
+func (s *Service) loadFromDatabase() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Load all rules (for demo org)
+	demoOrgID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	rules, err := s.repo.ListRules(ctx, demoOrgID, false)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to load alert rules from database")
+	} else {
+		for i := range rules {
+			s.rules[rules[i].ID] = &rules[i]
+		}
+		s.logger.Info().Int("count", len(rules)).Msg("Loaded alert rules from database")
+	}
+
+	// Load all channels
+	channels, err := s.repo.ListChannels(ctx, demoOrgID)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to load alert channels from database")
+	} else {
+		for i := range channels {
+			s.channels[channels[i].ID] = &channels[i]
+		}
+		s.logger.Info().Int("count", len(channels)).Msg("Loaded alert channels from database")
+	}
+
+	// If no data, create defaults
+	if len(s.rules) == 0 && len(s.channels) == 0 {
+		s.createDemoChannel()
+		s.createDemoRule()
+		// Persist defaults to database
+		s.persistDefaults(ctx)
+	}
+}
+
+// persistDefaults saves the default demo data to the database.
+func (s *Service) persistDefaults(ctx context.Context) {
+	if s.repo == nil {
+		return
+	}
+
+	for _, channel := range s.channels {
+		if err := s.repo.CreateChannel(ctx, channel); err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to persist default channel")
+		}
+	}
+
+	for _, rule := range s.rules {
+		if err := s.repo.CreateRule(ctx, rule); err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to persist default rule")
+		}
+	}
 }
 
 func (s *Service) createDemoChannel() {
@@ -123,6 +185,15 @@ func (s *Service) CreateRule(input domain.AlertRuleInput, orgID, userID uuid.UUI
 		CreatedBy:     userID,
 	}
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.CreateRule(ctx, rule); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to persist alert rule")
+		}
+	}
+
 	s.rules[rule.ID] = rule
 
 	s.logger.Info().
@@ -175,6 +246,15 @@ func (s *Service) UpdateRule(id uuid.UUID, input domain.AlertRuleInput) *domain.
 	rule.Enabled = input.Enabled
 	rule.UpdatedAt = time.Now()
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.UpdateRule(ctx, rule); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to update alert rule in database")
+		}
+	}
+
 	return rule
 }
 
@@ -184,6 +264,14 @@ func (s *Service) DeleteRule(id uuid.UUID) bool {
 	defer s.mu.Unlock()
 
 	if _, exists := s.rules[id]; exists {
+		// Delete from database
+		if s.repo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.repo.DeleteRule(ctx, id); err != nil {
+				s.logger.Error().Err(err).Msg("Failed to delete alert rule from database")
+			}
+		}
 		delete(s.rules, id)
 		return true
 	}
@@ -204,6 +292,15 @@ func (s *Service) CreateChannel(input domain.AlertChannelInput, orgID uuid.UUID)
 		Enabled:   input.Enabled,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+	}
+
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.CreateChannel(ctx, channel); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to persist alert channel")
+		}
 	}
 
 	s.channels[channel.ID] = channel
@@ -252,6 +349,15 @@ func (s *Service) UpdateChannel(id uuid.UUID, input domain.AlertChannelInput) *d
 	channel.Enabled = input.Enabled
 	channel.UpdatedAt = time.Now()
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.UpdateChannel(ctx, channel); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to update alert channel in database")
+		}
+	}
+
 	return channel
 }
 
@@ -261,6 +367,14 @@ func (s *Service) DeleteChannel(id uuid.UUID) bool {
 	defer s.mu.Unlock()
 
 	if _, exists := s.channels[id]; exists {
+		// Delete from database
+		if s.repo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.repo.DeleteChannel(ctx, id); err != nil {
+				s.logger.Error().Err(err).Msg("Failed to delete alert channel from database")
+			}
+		}
 		delete(s.channels, id)
 		return true
 	}
@@ -316,6 +430,15 @@ func (s *Service) CreateAlert(ruleID uuid.UUID, value float64, message string) *
 		StartedAt: time.Now(),
 	}
 
+	// Persist to database
+	if s.repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.CreateAlert(ctx, &alert); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to persist alert")
+		}
+	}
+
 	// Keep only last 1000 alerts in memory
 	if len(s.alerts) >= 1000 {
 		s.alerts = s.alerts[1:]
@@ -346,6 +469,16 @@ func (s *Service) ResolveAlert(id uuid.UUID) *domain.Alert {
 			now := time.Now()
 			s.alerts[i].Status = domain.AlertStatusResolved
 			s.alerts[i].ResolvedAt = &now
+
+			// Persist to database
+			if s.repo != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := s.repo.UpdateAlert(ctx, &s.alerts[i]); err != nil {
+					s.logger.Error().Err(err).Msg("Failed to update resolved alert in database")
+				}
+			}
+
 			return &s.alerts[i]
 		}
 	}
@@ -363,6 +496,16 @@ func (s *Service) AcknowledgeAlert(id uuid.UUID, userID uuid.UUID) *domain.Alert
 			s.alerts[i].Status = domain.AlertStatusAcked
 			s.alerts[i].AckedAt = &now
 			s.alerts[i].AckedBy = &userID
+
+			// Persist to database
+			if s.repo != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := s.repo.UpdateAlert(ctx, &s.alerts[i]); err != nil {
+					s.logger.Error().Err(err).Msg("Failed to update acknowledged alert in database")
+				}
+			}
+
 			return &s.alerts[i]
 		}
 	}
