@@ -1,4 +1,3 @@
-// Package cmd contains the CLI commands.
 package cmd
 
 import (
@@ -7,63 +6,27 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-
-	"github.com/akz4ol/gatewayops/cli/internal/api"
 )
 
 var (
 	cfgFile string
 	apiKey  string
 	baseURL string
-	client  *api.Client
+	output  string
 )
 
-// rootCmd represents the base command.
 var rootCmd = &cobra.Command{
 	Use:   "gwo",
-	Short: "GatewayOps CLI - Manage MCP Gateway operations",
-	Long: `GatewayOps CLI provides commands to interact with the GatewayOps MCP Gateway.
+	Short: "GatewayOps CLI - Manage your MCP Gateway",
+	Long: `GatewayOps CLI provides a command-line interface to interact with
+the GatewayOps MCP Gateway platform. Manage API keys, view traces,
+monitor costs, and interact with MCP servers.
 
-You can manage API keys, call MCP tools, view traces, and monitor costs.
-
-Get started by setting your API key:
-  gwo auth login
-
-Or set the GATEWAYOPS_API_KEY environment variable.`,
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Skip auth check for auth commands
-		if cmd.Name() == "login" || cmd.Name() == "logout" || cmd.Name() == "version" {
-			return nil
-		}
-
-		// Get API key from flag, env, or config
-		key := apiKey
-		if key == "" {
-			key = viper.GetString("api_key")
-		}
-		if key == "" {
-			key = os.Getenv("GATEWAYOPS_API_KEY")
-		}
-
-		if key == "" {
-			return fmt.Errorf("API key not set. Run 'gwo auth login' or set GATEWAYOPS_API_KEY")
-		}
-
-		// Get base URL
-		url := baseURL
-		if url == "" {
-			url = viper.GetString("base_url")
-		}
-		if url == "" {
-			url = os.Getenv("GATEWAYOPS_BASE_URL")
-		}
-
-		client = api.NewClient(key, url)
-		return nil
-	},
+Configure with environment variables:
+  GATEWAYOPS_API_KEY  - Your API key
+  GATEWAYOPS_BASE_URL - API base URL (default: https://api.gatewayops.com)`,
 }
 
-// Execute runs the root command.
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -73,15 +36,11 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gwo.yaml)")
 	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "GatewayOps API key")
-	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "API base URL")
+	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "https://api.gatewayops.com", "API base URL")
+	rootCmd.PersistentFlags().StringVarP(&output, "output", "o", "table", "Output format (table, json)")
 
-	// Add subcommands
-	rootCmd.AddCommand(authCmd)
-	rootCmd.AddCommand(keysCmd)
-	rootCmd.AddCommand(mcpCmd)
-	rootCmd.AddCommand(tracesCmd)
-	rootCmd.AddCommand(costsCmd)
-	rootCmd.AddCommand(versionCmd)
+	viper.BindPFlag("api_key", rootCmd.PersistentFlags().Lookup("api-key"))
+	viper.BindPFlag("base_url", rootCmd.PersistentFlags().Lookup("base-url"))
 }
 
 func initConfig() {
@@ -100,15 +59,24 @@ func initConfig() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err == nil {
-		// Config file found
+		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	}
 }
 
-// versionCmd shows the CLI version.
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version number",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("gwo version 0.1.0")
-	},
+func getAPIKey() string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return viper.GetString("api_key")
+}
+
+func getBaseURL() string {
+	if baseURL != "" {
+		return baseURL
+	}
+	url := viper.GetString("base_url")
+	if url == "" {
+		return "https://api.gatewayops.com"
+	}
+	return url
 }

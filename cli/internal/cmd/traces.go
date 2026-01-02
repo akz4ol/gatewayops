@@ -4,51 +4,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
-	"text/tabwriter"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akz4ol/gatewayops/cli/internal/api"
+	"github.com/fatih/color"
+	"github.com/olekukonko/tablewriter"
+	"github.com/spf13/cobra"
 )
 
 var tracesCmd = &cobra.Command{
 	Use:   "traces",
-	Short: "View and search traces",
-	Long:  `Commands for viewing distributed traces.`,
+	Short: "Manage and view traces",
+	Long:  `View and search API traces from your MCP Gateway.`,
 }
 
 var tracesListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List traces",
+	Short: "List recent traces",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		outputJSON, _ := cmd.Flags().GetBool("json")
-		server, _ := cmd.Flags().GetString("server")
-		operation, _ := cmd.Flags().GetString("operation")
-		status, _ := cmd.Flags().GetString("status")
+		client := api.NewClient(getBaseURL(), getAPIKey())
+
 		limit, _ := cmd.Flags().GetInt("limit")
+		server, _ := cmd.Flags().GetString("server")
 
 		path := fmt.Sprintf("/v1/traces?limit=%d", limit)
 		if server != "" {
 			path += "&mcp_server=" + server
 		}
-		if operation != "" {
-			path += "&operation=" + operation
-		}
-		if status != "" {
-			path += "&status=" + status
+
+		data, err := client.Get(path)
+		if err != nil {
+			return err
 		}
 
-		var result api.TracePage
-		if err := client.Get(path, &result); err != nil {
-			return fmt.Errorf("failed to list traces: %w", err)
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
 		}
 
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result)
+		var result struct {
+			Traces []struct {
+				ID        string    `json:"id"`
+				MCPServer string    `json:"mcp_server"`
+				Operation string    `json:"operation"`
+				Status    string    `json:"status"`
+				Duration  int       `json:"duration_ms"`
+				CreatedAt time.Time `json:"created_at"`
+			} `json:"traces"`
+			Total int `json:"total"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		if len(result.Traces) == 0 {
@@ -56,31 +62,37 @@ var tracesListCmd = &cobra.Command{
 			return nil
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSERVER\tOPERATION\tSTATUS\tDURATION\tTIME")
-		for _, trace := range result.Traces {
-			duration := "-"
-			if trace.DurationMs > 0 {
-				duration = fmt.Sprintf("%dms", trace.DurationMs)
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"ID", "Server", "Operation", "Status", "Duration", "Time"})
+		table.SetBorder(false)
+
+		green := color.New(color.FgGreen).SprintFunc()
+		red := color.New(color.FgRed).SprintFunc()
+		yellow := color.New(color.FgYellow).SprintFunc()
+
+		for _, t := range result.Traces {
+			status := t.Status
+			switch t.Status {
+			case "success":
+				status = green(t.Status)
+			case "error":
+				status = red(t.Status)
+			default:
+				status = yellow(t.Status)
 			}
-			age := formatAge(trace.StartTime)
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				truncate(trace.ID, 12),
-				trace.MCPServer,
-				trace.Operation,
-				colorStatus(trace.Status),
-				duration,
-				age,
-			)
-		}
-		if err := w.Flush(); err != nil {
-			return err
+
+			table.Append([]string{
+				t.ID[:8],
+				t.MCPServer,
+				t.Operation,
+				status,
+				fmt.Sprintf("%dms", t.Duration),
+				t.CreatedAt.Format("15:04:05"),
+			})
 		}
 
-		if result.HasMore {
-			fmt.Printf("\n(showing %d of %d traces)\n", len(result.Traces), result.Total)
-		}
-
+		table.Render()
+		fmt.Printf("\nTotal: %d traces\n", result.Total)
 		return nil
 	},
 }
@@ -90,110 +102,58 @@ var tracesGetCmd = &cobra.Command{
 	Short: "Get trace details",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		traceID := args[0]
-		outputJSON, _ := cmd.Flags().GetBool("json")
+		client := api.NewClient(getBaseURL(), getAPIKey())
 
-		var trace api.Trace
-		if err := client.Get("/v1/traces/"+traceID, &trace); err != nil {
-			return fmt.Errorf("failed to get trace: %w", err)
+		data, err := client.Get("/v1/traces/" + args[0])
+		if err != nil {
+			return err
 		}
 
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(trace)
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
+		}
+
+		var trace struct {
+			ID        string                 `json:"id"`
+			MCPServer string                 `json:"mcp_server"`
+			Operation string                 `json:"operation"`
+			Status    string                 `json:"status"`
+			Duration  int                    `json:"duration_ms"`
+			Request   map[string]interface{} `json:"request"`
+			Response  map[string]interface{} `json:"response"`
+			CreatedAt time.Time              `json:"created_at"`
+		}
+		if err := json.Unmarshal(data, &trace); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		fmt.Printf("Trace: %s\n", trace.ID)
 		fmt.Printf("Server: %s\n", trace.MCPServer)
 		fmt.Printf("Operation: %s\n", trace.Operation)
-		fmt.Printf("Status: %s\n", colorStatus(trace.Status))
-		fmt.Printf("Started: %s\n", trace.StartTime.Format(time.RFC3339))
-		if trace.DurationMs > 0 {
-			fmt.Printf("Duration: %dms\n", trace.DurationMs)
-		}
-		if trace.Cost > 0 {
-			fmt.Printf("Cost: $%.4f\n", trace.Cost)
-		}
-		if trace.ErrorMessage != "" {
-			fmt.Printf("Error: %s\n", trace.ErrorMessage)
+		fmt.Printf("Status: %s\n", trace.Status)
+		fmt.Printf("Duration: %dms\n", trace.Duration)
+		fmt.Printf("Time: %s\n", trace.CreatedAt.Format(time.RFC3339))
+
+		if trace.Request != nil {
+			reqJSON, _ := json.MarshalIndent(trace.Request, "", "  ")
+			fmt.Printf("\nRequest:\n%s\n", string(reqJSON))
 		}
 
-		if len(trace.Spans) > 0 {
-			fmt.Println("\nSpans:")
-			printSpanTree(trace.Spans, "", "")
+		if trace.Response != nil {
+			respJSON, _ := json.MarshalIndent(trace.Response, "", "  ")
+			fmt.Printf("\nResponse:\n%s\n", string(respJSON))
 		}
 
 		return nil
 	},
 }
 
-func printSpanTree(spans []api.Span, parentID string, indent string) {
-	for _, span := range spans {
-		if span.ParentSpanID != parentID {
-			continue
-		}
-
-		statusIcon := "+"
-		if span.Status == "error" {
-			statusIcon = "x"
-		}
-
-		duration := "-"
-		if span.DurationMs > 0 {
-			duration = fmt.Sprintf("%dms", span.DurationMs)
-		}
-
-		fmt.Printf("%s[%s] %s (%s)\n", indent, statusIcon, span.Name, duration)
-
-		// Print child spans
-		printSpanTree(spans, span.ID, indent+"  ")
-	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-3] + "..."
-}
-
-func formatAge(t time.Time) string {
-	d := time.Since(t)
-	if d < time.Minute {
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-}
-
-func colorStatus(status string) string {
-	switch strings.ToLower(status) {
-	case "success":
-		return "\033[32m" + status + "\033[0m" // Green
-	case "error":
-		return "\033[31m" + status + "\033[0m" // Red
-	case "timeout":
-		return "\033[33m" + status + "\033[0m" // Yellow
-	default:
-		return status
-	}
-}
-
 func init() {
-	tracesListCmd.Flags().Bool("json", false, "Output as JSON")
-	tracesListCmd.Flags().StringP("server", "s", "", "Filter by MCP server")
-	tracesListCmd.Flags().StringP("operation", "o", "", "Filter by operation")
-	tracesListCmd.Flags().String("status", "", "Filter by status (success, error, timeout)")
-	tracesListCmd.Flags().IntP("limit", "n", 20, "Maximum number of traces to show")
-
-	tracesGetCmd.Flags().Bool("json", false, "Output as JSON")
-
+	rootCmd.AddCommand(tracesCmd)
 	tracesCmd.AddCommand(tracesListCmd)
 	tracesCmd.AddCommand(tracesGetCmd)
+
+	tracesListCmd.Flags().IntP("limit", "l", 20, "Number of traces to show")
+	tracesListCmd.Flags().StringP("server", "s", "", "Filter by MCP server")
 }

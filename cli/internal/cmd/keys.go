@@ -4,51 +4,87 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"text/tabwriter"
-
-	"github.com/spf13/cobra"
+	"time"
 
 	"github.com/akz4ol/gatewayops/cli/internal/api"
+	"github.com/fatih/color"
+	"github.com/olekukonko/tablewriter"
+	"github.com/spf13/cobra"
 )
 
 var keysCmd = &cobra.Command{
 	Use:   "keys",
 	Short: "Manage API keys",
-	Long:  `Commands for managing GatewayOps API keys.`,
+	Long:  `Create, list, and revoke API keys for your organization.`,
 }
 
 var keysListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List API keys",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		outputJSON, _ := cmd.Flags().GetBool("json")
+		client := api.NewClient(getBaseURL(), getAPIKey())
+
+		data, err := client.Get("/v1/api-keys")
+		if err != nil {
+			return err
+		}
+
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
+		}
 
 		var result struct {
-			Keys []api.APIKey `json:"keys"`
+			APIKeys []struct {
+				ID          string     `json:"id"`
+				Name        string     `json:"name"`
+				KeyPrefix   string     `json:"key_prefix"`
+				Environment string     `json:"environment"`
+				RateLimit   int        `json:"rate_limit"`
+				LastUsedAt  *time.Time `json:"last_used_at"`
+				Revoked     bool       `json:"revoked"`
+				CreatedAt   time.Time  `json:"created_at"`
+			} `json:"api_keys"`
 		}
-		if err := client.Get("/v1/api-keys", &result); err != nil {
-			return fmt.Errorf("failed to list keys: %w", err)
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result.Keys)
+		if len(result.APIKeys) == 0 {
+			fmt.Println("No API keys found")
+			return nil
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tNAME\tPREFIX\tENV\tPERMISSIONS\tRPM")
-		for _, key := range result.Keys {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n",
-				key.ID,
-				key.Name,
-				key.KeyPrefix,
-				key.Environment,
-				key.Permissions,
-				key.RateLimitRPM,
-			)
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Name", "Prefix", "Environment", "Rate Limit", "Last Used", "Status"})
+		table.SetBorder(false)
+
+		green := color.New(color.FgGreen).SprintFunc()
+		red := color.New(color.FgRed).SprintFunc()
+
+		for _, k := range result.APIKeys {
+			status := green("Active")
+			if k.Revoked {
+				status = red("Revoked")
+			}
+
+			lastUsed := "Never"
+			if k.LastUsedAt != nil {
+				lastUsed = k.LastUsedAt.Format("Jan 02 15:04")
+			}
+
+			table.Append([]string{
+				k.Name,
+				k.KeyPrefix,
+				k.Environment,
+				fmt.Sprintf("%d/min", k.RateLimit),
+				lastUsed,
+				status,
+			})
 		}
-		return w.Flush()
+
+		table.Render()
+		return nil
 	},
 }
 
@@ -56,53 +92,43 @@ var keysCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new API key",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		client := api.NewClient(getBaseURL(), getAPIKey())
+
 		name, _ := cmd.Flags().GetString("name")
 		env, _ := cmd.Flags().GetString("environment")
-		permissions, _ := cmd.Flags().GetString("permissions")
-		rpm, _ := cmd.Flags().GetInt("rpm")
-
-		if name == "" {
-			return fmt.Errorf("--name is required")
-		}
+		rateLimit, _ := cmd.Flags().GetInt("rate-limit")
 
 		body := map[string]interface{}{
 			"name":        name,
 			"environment": env,
-			"permissions": permissions,
+			"rate_limit":  rateLimit,
 		}
-		if rpm > 0 {
-			body["rateLimitRpm"] = rpm
+
+		data, err := client.Post("/v1/api-keys", body)
+		if err != nil {
+			return err
+		}
+
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
 		}
 
 		var result struct {
-			Key   api.APIKey `json:"key"`
-			Token string     `json:"token"`
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			RawKey string `json:"raw_key"`
 		}
-		if err := client.Post("/v1/api-keys", body, &result); err != nil {
-			return fmt.Errorf("failed to create key: %w", err)
-		}
-
-		fmt.Printf("Created API key: %s\n", result.Key.Name)
-		fmt.Printf("ID: %s\n", result.Key.ID)
-		fmt.Println()
-		fmt.Println("Your API key (save this, it won't be shown again):")
-		fmt.Printf("  %s\n", result.Token)
-		return nil
-	},
-}
-
-var keysDeleteCmd = &cobra.Command{
-	Use:   "delete [key-id]",
-	Short: "Delete an API key",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		keyID := args[0]
-
-		if err := client.Delete("/v1/api-keys/"+keyID, nil); err != nil {
-			return fmt.Errorf("failed to delete key: %w", err)
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
-		fmt.Printf("Deleted API key: %s\n", keyID)
+		fmt.Printf("API Key created successfully!\n\n")
+		fmt.Printf("Name: %s\n", result.Name)
+		fmt.Printf("ID: %s\n", result.ID)
+		fmt.Printf("\n")
+		color.New(color.FgYellow, color.Bold).Println("Save this key - it will not be shown again:")
+		color.New(color.FgGreen).Println(result.RawKey)
 		return nil
 	},
 }
@@ -112,27 +138,26 @@ var keysRevokeCmd = &cobra.Command{
 	Short: "Revoke an API key",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		keyID := args[0]
+		client := api.NewClient(getBaseURL(), getAPIKey())
 
-		if err := client.Post("/v1/api-keys/"+keyID+"/revoke", nil, nil); err != nil {
-			return fmt.Errorf("failed to revoke key: %w", err)
+		_, err := client.Delete("/v1/api-keys/" + args[0])
+		if err != nil {
+			return err
 		}
 
-		fmt.Printf("Revoked API key: %s\n", keyID)
+		fmt.Println("API key revoked successfully")
 		return nil
 	},
 }
 
 func init() {
-	keysListCmd.Flags().Bool("json", false, "Output as JSON")
-
-	keysCreateCmd.Flags().StringP("name", "n", "", "Name for the API key (required)")
-	keysCreateCmd.Flags().StringP("environment", "e", "production", "Environment (production or sandbox)")
-	keysCreateCmd.Flags().StringP("permissions", "p", "full", "Permissions (full, read, write)")
-	keysCreateCmd.Flags().Int("rpm", 0, "Rate limit (requests per minute)")
-
+	rootCmd.AddCommand(keysCmd)
 	keysCmd.AddCommand(keysListCmd)
 	keysCmd.AddCommand(keysCreateCmd)
-	keysCmd.AddCommand(keysDeleteCmd)
 	keysCmd.AddCommand(keysRevokeCmd)
+
+	keysCreateCmd.Flags().StringP("name", "n", "", "Name for the API key (required)")
+	keysCreateCmd.Flags().StringP("environment", "e", "development", "Environment (development, staging, production)")
+	keysCreateCmd.Flags().IntP("rate-limit", "r", 100, "Rate limit (requests per minute)")
+	keysCreateCmd.MarkFlagRequired("name")
 }

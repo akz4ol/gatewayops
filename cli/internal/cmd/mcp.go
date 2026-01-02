@@ -4,73 +4,84 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"text/tabwriter"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akz4ol/gatewayops/cli/internal/api"
+	"github.com/olekukonko/tablewriter"
+	"github.com/spf13/cobra"
 )
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
-	Short: "MCP server operations",
-	Long:  `Commands for interacting with MCP servers through the gateway.`,
+	Short: "Interact with MCP servers",
+	Long:  `List and interact with MCP servers through the gateway.`,
 }
 
-// Tools commands
-var toolsCmd = &cobra.Command{
-	Use:   "tools",
-	Short: "Tool operations",
-}
-
-var toolsListCmd = &cobra.Command{
-	Use:   "list [server]",
-	Short: "List available tools",
+var mcpToolsCmd = &cobra.Command{
+	Use:   "tools [server]",
+	Short: "List tools on an MCP server",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		client := api.NewClient(getBaseURL(), getAPIKey())
 		server := args[0]
-		outputJSON, _ := cmd.Flags().GetBool("json")
+
+		data, err := client.Post(fmt.Sprintf("/v1/mcp/%s/tools/list", server), nil)
+		if err != nil {
+			return err
+		}
+
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
+		}
 
 		var result struct {
-			Tools []api.ToolDefinition `json:"tools"`
+			Tools []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"tools"`
 		}
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/tools/list", server), nil, &result); err != nil {
-			return fmt.Errorf("failed to list tools: %w", err)
-		}
-
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result.Tools)
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tDESCRIPTION")
-		for _, tool := range result.Tools {
-			desc := tool.Description
+		if len(result.Tools) == 0 {
+			fmt.Println("No tools found")
+			return nil
+		}
+
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Tool", "Description"})
+		table.SetBorder(false)
+		table.SetColWidth(60)
+
+		for _, t := range result.Tools {
+			desc := t.Description
 			if len(desc) > 60 {
 				desc = desc[:57] + "..."
 			}
-			fmt.Fprintf(w, "%s\t%s\n", tool.Name, desc)
+			table.Append([]string{t.Name, desc})
 		}
-		return w.Flush()
+
+		table.Render()
+		fmt.Printf("\nTotal: %d tools on %s\n", len(result.Tools), server)
+		return nil
 	},
 }
 
-var toolsCallCmd = &cobra.Command{
+var mcpCallCmd = &cobra.Command{
 	Use:   "call [server] [tool]",
-	Short: "Call a tool",
+	Short: "Call a tool on an MCP server",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		client := api.NewClient(getBaseURL(), getAPIKey())
 		server := args[0]
 		tool := args[1]
-		outputJSON, _ := cmd.Flags().GetBool("json")
-		argsJSON, _ := cmd.Flags().GetString("args")
 
+		argsJSON, _ := cmd.Flags().GetString("args")
 		var toolArgs map[string]interface{}
 		if argsJSON != "" {
 			if err := json.Unmarshal([]byte(argsJSON), &toolArgs); err != nil {
-				return fmt.Errorf("invalid --args JSON: %w", err)
+				return fmt.Errorf("invalid JSON args: %w", err)
 			}
 		}
 
@@ -79,233 +90,85 @@ var toolsCallCmd = &cobra.Command{
 			"arguments": toolArgs,
 		}
 
-		var result api.ToolCallResult
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/tools/call", server), body, &result); err != nil {
-			return fmt.Errorf("tool call failed: %w", err)
-		}
-
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result)
-		}
-
-		if result.IsError {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", result.Content)
-			os.Exit(1)
-		}
-
-		// Pretty print the content
-		content, err := json.MarshalIndent(result.Content, "", "  ")
+		data, err := client.Post(fmt.Sprintf("/v1/mcp/%s/tools/call", server), body)
 		if err != nil {
-			fmt.Println(result.Content)
-		} else {
-			fmt.Println(string(content))
+			return err
 		}
 
-		if result.TraceID != "" {
-			fmt.Fprintf(os.Stderr, "\nTrace ID: %s\n", result.TraceID)
+		var result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		}
-		if result.DurationMs > 0 {
-			fmt.Fprintf(os.Stderr, "Duration: %dms\n", result.DurationMs)
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
-		if result.Cost > 0 {
-			fmt.Fprintf(os.Stderr, "Cost: $%.4f\n", result.Cost)
+
+		for _, c := range result.Content {
+			if c.Type == "text" {
+				fmt.Println(c.Text)
+			}
 		}
 
 		return nil
 	},
 }
 
-// Resources commands
-var resourcesCmd = &cobra.Command{
-	Use:   "resources",
-	Short: "Resource operations",
-}
-
-var resourcesListCmd = &cobra.Command{
-	Use:   "list [server]",
-	Short: "List available resources",
+var mcpResourcesCmd = &cobra.Command{
+	Use:   "resources [server]",
+	Short: "List resources on an MCP server",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		client := api.NewClient(getBaseURL(), getAPIKey())
 		server := args[0]
-		outputJSON, _ := cmd.Flags().GetBool("json")
 
-		var result struct {
-			Resources []api.Resource `json:"resources"`
-		}
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/resources/list", server), nil, &result); err != nil {
-			return fmt.Errorf("failed to list resources: %w", err)
+		data, err := client.Post(fmt.Sprintf("/v1/mcp/%s/resources/list", server), nil)
+		if err != nil {
+			return err
 		}
 
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result.Resources)
-		}
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "URI\tNAME\tTYPE")
-		for _, res := range result.Resources {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", res.URI, res.Name, res.MimeType)
-		}
-		return w.Flush()
-	},
-}
-
-var resourcesReadCmd = &cobra.Command{
-	Use:   "read [server] [uri]",
-	Short: "Read a resource",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		server := args[0]
-		uri := args[1]
-		outputJSON, _ := cmd.Flags().GetBool("json")
-
-		body := map[string]interface{}{
-			"uri": uri,
-		}
-
-		var result api.ResourceContent
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/resources/read", server), body, &result); err != nil {
-			return fmt.Errorf("failed to read resource: %w", err)
-		}
-
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result)
-		}
-
-		if result.Text != "" {
-			fmt.Println(result.Text)
-		} else if result.Blob != "" {
-			fmt.Printf("[Binary content: %d bytes]\n", len(result.Blob))
-		}
-
-		return nil
-	},
-}
-
-// Prompts commands
-var promptsCmd = &cobra.Command{
-	Use:   "prompts",
-	Short: "Prompt operations",
-}
-
-var promptsListCmd = &cobra.Command{
-	Use:   "list [server]",
-	Short: "List available prompts",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		server := args[0]
-		outputJSON, _ := cmd.Flags().GetBool("json")
-
-		var result struct {
-			Prompts []api.Prompt `json:"prompts"`
-		}
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/prompts/list", server), nil, &result); err != nil {
-			return fmt.Errorf("failed to list prompts: %w", err)
-		}
-
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result.Prompts)
-		}
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tDESCRIPTION")
-		for _, p := range result.Prompts {
-			desc := p.Description
-			if len(desc) > 60 {
-				desc = desc[:57] + "..."
-			}
-			fmt.Fprintf(w, "%s\t%s\n", p.Name, desc)
-		}
-		return w.Flush()
-	},
-}
-
-var promptsGetCmd = &cobra.Command{
-	Use:   "get [server] [name]",
-	Short: "Get a prompt",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		server := args[0]
-		name := args[1]
-		outputJSON, _ := cmd.Flags().GetBool("json")
-		argsJSON, _ := cmd.Flags().GetString("args")
-
-		var promptArgs map[string]interface{}
-		if argsJSON != "" {
-			if err := json.Unmarshal([]byte(argsJSON), &promptArgs); err != nil {
-				return fmt.Errorf("invalid --args JSON: %w", err)
-			}
-		}
-
-		body := map[string]interface{}{
-			"name":      name,
-			"arguments": promptArgs,
+		if output == "json" {
+			fmt.Println(string(data))
+			return nil
 		}
 
 		var result struct {
-			Messages []api.PromptMessage `json:"messages"`
+			Resources []struct {
+				URI         string `json:"uri"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				MimeType    string `json:"mimeType"`
+			} `json:"resources"`
 		}
-		if err := client.Post(fmt.Sprintf("/v1/mcp/%s/prompts/get", server), body, &result); err != nil {
-			return fmt.Errorf("failed to get prompt: %w", err)
-		}
-
-		if outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(result.Messages)
-		}
-
-		for _, msg := range result.Messages {
-			fmt.Printf("[%s]\n", msg.Role)
-			content, err := json.MarshalIndent(msg.Content, "", "  ")
-			if err != nil {
-				fmt.Println(msg.Content)
-			} else {
-				fmt.Println(string(content))
-			}
-			fmt.Println()
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
+		if len(result.Resources) == 0 {
+			fmt.Println("No resources found")
+			return nil
+		}
+
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"URI", "Name", "Type"})
+		table.SetBorder(false)
+
+		for _, r := range result.Resources {
+			table.Append([]string{r.URI, r.Name, r.MimeType})
+		}
+
+		table.Render()
 		return nil
 	},
 }
 
 func init() {
-	// Tools flags
-	toolsListCmd.Flags().Bool("json", false, "Output as JSON")
-	toolsCallCmd.Flags().Bool("json", false, "Output as JSON")
-	toolsCallCmd.Flags().StringP("args", "a", "", "Tool arguments as JSON")
+	rootCmd.AddCommand(mcpCmd)
+	mcpCmd.AddCommand(mcpToolsCmd)
+	mcpCmd.AddCommand(mcpCallCmd)
+	mcpCmd.AddCommand(mcpResourcesCmd)
 
-	// Resources flags
-	resourcesListCmd.Flags().Bool("json", false, "Output as JSON")
-	resourcesReadCmd.Flags().Bool("json", false, "Output as JSON")
-
-	// Prompts flags
-	promptsListCmd.Flags().Bool("json", false, "Output as JSON")
-	promptsGetCmd.Flags().Bool("json", false, "Output as JSON")
-	promptsGetCmd.Flags().StringP("args", "a", "", "Prompt arguments as JSON")
-
-	// Add tool commands
-	toolsCmd.AddCommand(toolsListCmd)
-	toolsCmd.AddCommand(toolsCallCmd)
-
-	// Add resource commands
-	resourcesCmd.AddCommand(resourcesListCmd)
-	resourcesCmd.AddCommand(resourcesReadCmd)
-
-	// Add prompt commands
-	promptsCmd.AddCommand(promptsListCmd)
-	promptsCmd.AddCommand(promptsGetCmd)
-
-	// Add to mcp
-	mcpCmd.AddCommand(toolsCmd)
-	mcpCmd.AddCommand(resourcesCmd)
-	mcpCmd.AddCommand(promptsCmd)
+	mcpCallCmd.Flags().StringP("args", "a", "", "Tool arguments as JSON")
 }

@@ -1,4 +1,3 @@
-// GatewayOps CLI - Command line interface for the GatewayOps MCP Gateway
 package main
 
 import (
