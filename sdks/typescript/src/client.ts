@@ -4,6 +4,7 @@
 
 import { fetch, type RequestInit, type Response } from 'undici';
 import { SDK_VERSION } from './version';
+import { AgentsClient } from './agents';
 import type {
   GatewayOpsOptions,
   ToolDefinition,
@@ -86,6 +87,13 @@ export class GatewayOps {
    */
   get costs(): CostsClient {
     return new CostsClient(this);
+  }
+
+  /**
+   * Get the agents client for agent platform integration
+   */
+  get agents(): AgentsClient {
+    return new AgentsClient(this);
   }
 
   /**

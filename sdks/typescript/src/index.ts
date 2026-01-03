@@ -16,6 +16,23 @@
 
 export { GatewayOps, MCPClient, ToolsClient, ResourcesClient, PromptsClient, TracesClient, CostsClient, TraceContext } from './client';
 
+export { AgentsClient, AgentConnection } from './agents';
+export type {
+  ConnectOptions,
+  ConnectionInfo,
+  ServerInfo,
+  RateLimits,
+  ToolCall,
+  ExecuteOptions,
+  ToolResult,
+  ContentBlock,
+  ErrorInfo,
+  ExecuteResult,
+  ProgressEvent,
+  StreamEvent,
+  OpenAITool,
+} from './agents';
+
 export {
   GatewayOpsError,
   AuthenticationError,

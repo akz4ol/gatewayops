@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/akz4ol/gatewayops/gateway/internal/agent"
 	"github.com/akz4ol/gatewayops/gateway/internal/alerting"
 	"github.com/akz4ol/gatewayops/gateway/internal/approval"
 	"github.com/akz4ol/gatewayops/gateway/internal/audit"
@@ -124,6 +125,10 @@ func main() {
 	// Initialize settings handler
 	settingsHandler := handler.NewSettingsHandler(logger)
 
+	// Initialize agent manager and handler
+	agentManager := agent.NewManager(logger)
+	agentHandler := handler.NewAgentHandler(logger, agentManager, "gatewayops-api.fly.dev")
+
 	// Create router with dependencies
 	deps := router.Dependencies{
 		Config:            cfg,
@@ -148,6 +153,7 @@ func main() {
 		SSOHandler:        ssoHandler,
 		UserHandler:       userHandler,
 		SettingsHandler:   settingsHandler,
+		AgentHandler:      agentHandler,
 	}
 
 	r := router.New(deps)

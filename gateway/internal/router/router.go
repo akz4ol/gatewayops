@@ -37,6 +37,7 @@ type Dependencies struct {
 	SSOHandler        *handler.SSOHandler
 	UserHandler       *handler.UserHandler
 	SettingsHandler   *handler.SettingsHandler
+	AgentHandler      *handler.AgentHandler
 }
 
 // New creates a new router with all middleware and routes configured.
@@ -330,6 +331,27 @@ func New(deps Dependencies) http.Handler {
 				r.Get("/", deps.SettingsHandler.GetSettings)
 				r.Put("/", deps.SettingsHandler.UpdateSettings)
 			})
+		}
+
+		// Agent Platform API - public for demo
+		if deps.AgentHandler != nil {
+			r.Route("/agents", func(r chi.Router) {
+				// Connection management
+				r.Post("/connect", deps.AgentHandler.Connect)
+				r.Get("/stats", deps.AgentHandler.GetStats)
+				r.Get("/{connectionID}", deps.AgentHandler.GetConnection)
+				r.Delete("/{connectionID}", deps.AgentHandler.Disconnect)
+
+				// WebSocket upgrade (handled specially)
+				r.Get("/{connectionID}/ws", deps.AgentHandler.WebSocket)
+			})
+
+			// Universal execution endpoint
+			r.Post("/execute", deps.AgentHandler.Execute)
+			r.Post("/execute/stream", deps.AgentHandler.ExecuteStream)
+
+			// OpenAI/LangChain compatible MCP endpoint
+			r.Get("/mcp/tools", deps.AgentHandler.ListTools)
 		}
 	})
 
