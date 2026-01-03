@@ -13,6 +13,7 @@ import {
   Users,
   FileText,
   CheckSquare,
+  Bot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
@@ -22,6 +23,7 @@ const navigation = [
   { name: 'Traces', href: '/traces', icon: Activity },
   { name: 'Costs', href: '/costs', icon: DollarSign },
   { name: 'API Keys', href: '/api-keys', icon: Key },
+  { name: 'Agents', href: '/agents', icon: Bot },
   { name: 'Safety', href: '/safety', icon: Shield },
   { name: 'Alerts', href: '/alerts', icon: Bell },
   { name: 'Team', href: '/team', icon: Users },
